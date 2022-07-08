@@ -40,32 +40,22 @@ nStim = np.sum(stim.active)
 # get index of corresponding trial for each stim in stim table
 stimTrialIndex = np.searchsorted(trials.start_time,stim.start_time[stim.active]) - 1
 
-# # check delay between trial start times and first stim start times
-# firstStimInTrialStartTimes = np.array([stim.start_time[stim.active][stimTrialIndex==i].iloc[0] for i in range(nTrials)])
-# firstStimDelay = firstStimInTrialStartTimes - trials.start_time
+# check delay between trial start times and first stim start times
+firstStimInTrialStartTimes = np.array([stim.start_time[stim.active][stimTrialIndex==i].iloc[0] for i in range(nTrials)])
+firstStimDelay = firstStimInTrialStartTimes - trials.start_time
 
-# fig = plt.figure()
-# ax = fig.add_subplot(1,1,1)
-# ax.hist(firstStimDelay)
-# ax.set_xlabel('time from trial start to first stim (s)')
-# ax.set_ylabel('# trials')
-
-# # use the trial indices to re-create the image sequence
-# # and compare to the image sequence in the stim table (ignoring omitted flashes)
-# trialImageSequence = np.empty(numStim,dtype=object)
-# for trialInd,(initialImage,changeImage) in enumerate(zip(trials.initial_image_name,trials.change_image_name)):
-#     stimInd = np.where(stimTrialIndex==trialInd)[0]
-#     trialStart,trialEnd = stimInd[[0,-1]]
-#     changeInd = np.where(stim.is_change[stimInd])[0]
-#     changeInd = stimInd[changeInd[0]] if len(changeInd) > 0 else trialEnd+1
-#     trialImageSequence[trialStart:changeInd] = initialImage
-#     trialImageSequence[changeInd:trialEnd+1] = changeImage
-
-# stimImageSequence = np.array(stim.image_name[stim.active])
-# omitted = np.array(stim.omitted[stim.active]).astype(bool)
-# assert(np.all(trialImageSequence[~omitted]==stimImageSequence[~omitted]))
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.hist(firstStimDelay,color='k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('time from trial start to first stim (s)')
+ax.set_ylabel('# trials')
+plt.tight_layout()
 
 
+# find flashes with licks
 minLickLatency = 0.15
 flashHasLick = np.zeros(nStim)
 stimStart = np.concatenate((stim.start_time[stim.active],[trials.stop_time.iloc[-1]]))
@@ -88,15 +78,30 @@ for trialInd in range(nTrials):
     if len(omittedFlash)>0:
         flashesToOmitted[trialInd] = omittedFlash[0]
         
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+h,bins = np.histogram(flashesToChange[trials.stimulus_change],bins=np.arange(1,14))
+ax.plot(bins[:-1],h/np.sum(trials.stimulus_change),'k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('flashes to change')
+ax.set_ylabel('fraction of change trials')
+plt.tight_layout()
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-h,bins = np.histogram(flashesToChange[trials.stimulus_change],bins=np.arange(0,np.nanmax(flashesToChange)+3))
-ax.plot(bins[:-1],h/np.sum(trials.stimulus_change),'k')
-ax.set_xlabel('flashes to change')
-ax.set_ylabel('fraction of change trials')
+h,bins = np.histogram(flashesToLick[trials.aborted],bins=np.arange(1,14))
+ax.plot(bins[:-1],h/np.sum(trials.aborted),'k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('flashes to abort')
+ax.set_ylabel('fraction of aborted trials')
+plt.tight_layout()
 
 
+# find lick probability for each flash excluding flashes after abort, change, or omission 
 flashLickProb = np.zeros((trials.shape[0],12))
 for i,(j,k,l) in enumerate(zip(flashesToLick,flashesToChange,flashesToOmitted)):
     if j<12:
@@ -108,16 +113,49 @@ for i,(j,k,l) in enumerate(zip(flashesToLick,flashesToChange,flashesToOmitted)):
     if not np.isnan(l):
         flashLickProb[i,int(l)-1:] = np.nan
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = np.arange(1,13)
 prevTrialAborted = np.concatenate(([False],trials.aborted[:-1]))
-plt.plot(np.nanmean(flashLickProb,axis=0),'k')
-plt.plot(np.nanmean(flashLickProb[prevTrialAborted],axis=0),'b')
+ax.plot(x,np.nanmean(flashLickProb,axis=0),'k',label='all trials')
+ax.plot(x,np.nanmean(flashLickProb[prevTrialAborted],axis=0),'b',label='after aborted trial')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('flashes before abort, omission, or change')
+ax.set_ylabel('lick probability')
+ax.legend()
+plt.tight_layout()
 
 
+# lick intervals
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+lickIntervals = np.diff(lickTimes[lickTimes<trials.stop_time.iloc[nTrials-1]])
+h,bins = np.histogram(lickIntervals,bins=np.arange(0,9.75,0.75))
+ax.plot(bins[:-1]+0.75/2,h/lickIntervals.size,'k')
+ax.set_yscale('log')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('inter-lick interval (s)')
+ax.set_ylabel('fraction of licks')
+plt.tight_layout()
 
-plt.hist(np.diff(lickTimes[lickTimes<trials.stop_time.iloc[-1]]),bins=np.arange(0,12,0.75))
 
-
-plt.hist(np.diff(np.where(flashHasLick)[0]),bins=np.arange(13))
+# flash with lick intervals
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+flashWithLickIntervals = np.diff(np.where(flashHasLick)[0])
+h,bins = np.histogram(flashWithLickIntervals,bins=np.arange(1,14))
+ax.plot(bins[:-1],h/flashWithLickIntervals.size,'k')
+ax.set_yscale('log')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('flashes between flashes with licks')
+ax.set_ylabel('probability')
+plt.tight_layout()
 
 
 
