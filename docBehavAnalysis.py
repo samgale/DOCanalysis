@@ -22,7 +22,7 @@ nwb_paths = glob.glob(os.path.join(nwb_base, '*nwb'))
 
 nwbPath = nwb_paths[0]
 
-nwbPath = r"D:\visual_behavior_nwbs\ecephys_session_1044597824.nwb"
+nwbPath = r"D:\visual_behavior_nwbs\ecephys_session_1043752325.nwb"
 
 
 with NWBHDF5IO(nwbPath, 'r', load_namespaces=True) as nwb_io:
@@ -66,69 +66,58 @@ stimTrialIndex = np.searchsorted(trials.start_time,stim.start_time[stim.active])
 # assert(np.all(trialImageSequence[~omitted]==stimImageSequence[~omitted]))
 
 
-
+minLickLatency = 0.15
 flashHasLick = np.zeros(nStim)
 stimStart = np.concatenate((stim.start_time[stim.active],[trials.stop_time.iloc[-1]]))
 for i in range(nStim):
-    if np.any((lickTimes >= stimStart[i]) & (lickTimes < stimStart[i+1])):
+    if np.any((lickTimes >= stimStart[i]+minLickLatency) & (lickTimes < stimStart[i+1]+minLickLatency)):
         flashHasLick[i] = True
 
 flashesToLick = np.full(trials.shape[0],np.nan)
 flashesToChange = flashesToLick.copy()
+flashesToOmitted = flashesToLick.copy()
 for trialInd in range(nTrials):
     stimInd = np.where(stimTrialIndex==trialInd)[0]
     lickFlash = np.where(flashHasLick[stimInd])[0]
     if len(lickFlash)>0:
         flashesToLick[trialInd] = lickFlash[0]+1
-    stimFlash = np.where(stim.is_change[stimInd])[0]
-    if len(stimFlash)>0:
-        flashesToChange[trialInd] = stimFlash[0]+1
+    changeFlash = np.where(stim.is_change[stimInd])[0]
+    if len(changeFlash)>0:
+        flashesToChange[trialInd] = changeFlash[0]+1
+    omittedFlash = np.where(stim.omitted[stimInd])[0]
+    if len(omittedFlash)>0:
+        flashesToOmitted[trialInd] = omittedFlash[0]
         
 
-flashesToHit = flashesToLick[trials.hit]
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-h,bins = np.histogram(flashesToHit,bins=np.arange(0,flashesToHit.max()+3))
-ax.plot(bins[:-1],h,'k')
-ax.set_xlabel('flashes to hit')
-ax.set_ylabel('trials')
-
-
+h,bins = np.histogram(flashesToChange[trials.stimulus_change],bins=np.arange(0,np.nanmax(flashesToChange)+3))
+ax.plot(bins[:-1],h/np.sum(trials.stimulus_change),'k')
+ax.set_xlabel('flashes to change')
+ax.set_ylabel('fraction of change trials')
 
 
 flashLickProb = np.zeros((trials.shape[0],12))
-for i,(j,k) in enumerate(zip(flashesToLick,flashesToChange)):
+for i,(j,k,l) in enumerate(zip(flashesToLick,flashesToChange,flashesToOmitted)):
     if j<12:
         j = int(j)
         flashLickProb[i,j-1] = 1
         flashLickProb[i,j:] = np.nan
     if not np.isnan(k):
         flashLickProb[i,int(k)-1:] = np.nan
+    if not np.isnan(l):
+        flashLickProb[i,int(l)-1:] = np.nan
 
-prevAborted = np.concatenate(([False],trials.aborted[:-1]))
-plt.plot(np.nanmean(flashLickProb[prevAborted],axis=0),'k')
-
-
-
-abortedTrials = np.array(trials.aborted)
-noLickAbortedTrials = abortedTrials & np.array([len(lt)<1 for lt in trials.lick_times])
-autoRewardedTrials = np.array(trials.auto_rewarded)
-ignoreTrials = noLickAbortedTrials | autoRewardedTrials
-
-
-trialStartTime= np.array(trials.start_time)
-trialEndTime = np.array(trials.change_time_no_display_delay)
-
-ind = abortedTrials & ~ignoreTrials
-trialEndTime[ind] = np.array([lt[0] for lt in trials.lick_times[ind]])
-
-trialStartFlash,trialEndFlash = [np.searchsorted(stim.start_time[stim.active],st) for st in (trialStartTime,trialEndTime)]
-
-trialFlashes = trialEndFlash-trialStartFlash+1
+prevTrialAborted = np.concatenate(([False],trials.aborted[:-1]))
+plt.plot(np.nanmean(flashLickProb,axis=0),'k')
+plt.plot(np.nanmean(flashLickProb[prevTrialAborted],axis=0),'b')
 
 
 
+plt.hist(np.diff(lickTimes[lickTimes<trials.stop_time.iloc[-1]]),bins=np.arange(0,12,0.75))
 
+
+plt.hist(np.diff(np.where(flashHasLick)[0]),bins=np.arange(13))
 
 
 
