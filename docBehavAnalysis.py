@@ -16,13 +16,30 @@ from allensdk.brain_observatory.ecephys.behavior_ecephys_session import (
     BehaviorEcephysSession)
 
 
+def fitCurve(func,x,y,initGuess=None,bounds=None):
+    return scipy.optimize.curve_fit(func,x,y,p0=initGuess,bounds=bounds)[0]
+    
+
+def expDecay(x,amp,offset,tau):
+    return amp * np.exp(-x/tau) + offset
+
+
+def gauss(x,amp,offset,mu,sigma):
+    return amp * np.exp((-(x-mu)**2) / (2*(sigma**2))) + offset
+
+
+def expDecayPlusGauss(x,ampExp,offsetExp,tau,ampGauss,offsetGauss,mu,sigma):
+    return expDecay(x,ampExp,offsetExp,tau) + gauss(x,ampGauss,offsetGauss,mu,sigma)
+
+
+
 nwb_base = r"\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\vbn_s3_cache\visual-behavior-neuropixels-0.1.0\ecephys_sessions"
 nwb_paths = glob.glob(os.path.join(nwb_base, '*nwb'))
 
 
 nwbPath = nwb_paths[0]
 
-nwbPath = r"D:\visual_behavior_nwbs\ecephys_session_1043752325.nwb"
+nwbPath = r"D:\visual_behavior_nwbs\ecephys_session_1044597824.nwb"
 
 
 with NWBHDF5IO(nwbPath, 'r', load_namespaces=True) as nwb_io:
@@ -128,6 +145,29 @@ ax.legend()
 plt.tight_layout()
 
 
+# fit lick probability curve
+x = np.arange(12)
+y = np.nanmean(flashLickProb,axis=0)
+bounds = ((0,0,0,0,0,0,0),(1,1,12,1,1,12,12))
+fitParams = fitCurve(expDecayPlusGauss,x,y,bounds=bounds)
+ampExp,offsetExp,tau,ampGauss,offsetGauss,mu,sigma = fitParams
+fity = expDecayPlusGauss(x,*fitParams)
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = np.arange(1,13)
+prevTrialAborted = np.concatenate(([False],trials.aborted[:-1]))
+ax.plot(x,y,'k',label='observed')
+ax.plot(x,fity,'r',label='fit:'+'\nexp amp = '+str(round(ampExp,2))+'\ngauss amp = '+str(round(ampGauss,2))+'\ngauss mean = '+str(round(mu+1,2)))
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('flashes before abort, omission, or change')
+ax.set_ylabel('lick probability')
+ax.legend()
+plt.tight_layout()
+
+
 # lick intervals
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -143,7 +183,7 @@ ax.set_ylabel('fraction of licks')
 plt.tight_layout()
 
 
-# flash with lick intervals
+# intervals (number of flashes) between flashes with licks
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 flashWithLickIntervals = np.diff(np.where(flashHasLick)[0])
