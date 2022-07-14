@@ -399,11 +399,12 @@ for obj in sessions:
     omission[postOmitted[postOmitted<omission.size]]=True
     x['omission'].append(omission)
     x['change'].append(obj.flashIsChange.astype(float))
-    x['novelty'].append(np.in1d(obj.flashImage,novelH).astype(float))
+    x['novelty'].append((obj.flashIsChange & np.in1d(obj.flashImage,novelH)).astype(float))
     y.append(flashHasLick)
         
 excludedFlashes = [np.isnan(a) for a in y]
 
+# fit all sessions
 d = {'inputs': {key: np.concatenate(val)[~np.concatenate(excludedFlashes)][:,None] for key,val in x.items()},
      'y': np.concatenate(y)[~np.concatenate(excludedFlashes)],
      'dayLength': np.array([np.sum(~b) for b in excludedFlashes])}
@@ -425,14 +426,92 @@ print(time.perf_counter()-t)
 cvFolds = 5
 cvTrials = d['y'].size - (d['y'].size % cvFolds)
 t = time.perf_counter()
-cvLikelihood,cvProbMiss = psytrack.crossValidate(psytrack.trim(d,END=cvTrials), hyper, weights, optList, F=cvFolds, seed=0)
+cvLikelihood,cvProbNoLick = psytrack.crossValidate(psytrack.trim(d,END=cvTrials), hyper, weights, optList, F=cvFolds, seed=0)
 print(time.perf_counter()-t)
-cvProbResp = 1-cvProbMiss
+cvProbLick = 1-cvProbNoLick
 
-yModel = (cvProbResp>=0.5).astype(float)
+yModel = (cvProbLick>=0.5).astype(float)
 accuracy = 1 - (np.abs(y[:cvTrials]-yModel).sum() / cvTrials)
 
+fig = plt.figure(figsize=(8,8))
+ylim = [min(0,1.05*wMode.min()),1.05*wMode.max()]
+for wi,(w,lbl) in enumerate(zip(wMode,sorted(weights.keys()))):
+    ax = fig.add_subplot(nWeights,1,wi+1)
+    sessionFlashes = d['dayLength']
+    sessionStartStop = np.concatenate(([0],np.cumsum(sessionFlashes)))
+    for si in range(len(sessions)):
+        ax.plot(np.arange(sessionFlashes[si])+1,w[sessionStartStop[si]:sessionStartStop[si+1]],'k',alpha=0.5)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False,labelsize=10)
+    ax.set_ylim(ylim)
+plt.tight_layout()
 
+
+# fit individual sessions
+hyperparams = []
+evidence = []
+modelWeights = []
+hessian = []
+for i in range(len(sessions)):
+    print(i)
+    d = {'inputs': {key: val[i][~excludedFlashes[i]][:,None] for key,val in x.items() if key!='impulsivity'},
+         'y': y[i][~excludedFlashes[i]]}
+    d['inputs']['bias'] = np.ones(np.sum(~excludedFlashes[i]))
+
+    weights = {key: 1 for key in d['inputs']}
+
+    nWeights = sum(weights.values())
+
+    hyper= {'sigInit': 2**4.,
+            'sigma': [2**-4.] * nWeights}
+
+    optList = ['sigma']
+
+    t = time.perf_counter()
+    hyp, evd, wMode, hess_info = psytrack.hyperOpt(d, hyper, weights, optList)
+    print(time.perf_counter()-t)
+    
+    hyperparams.append(hyp)
+    evidence.append(evd)
+    modelWeights.append(wMode)
+    hessian.append(hess_info)
+
+    
+cvFolds = 5
+cvTrials = d['y'].size - (d['y'].size % cvFolds)
+t = time.perf_counter()
+cvLikelihood,cvProbNoLick = psytrack.crossValidate(psytrack.trim(d,END=cvTrials), hyper, weights, optList, F=cvFolds, seed=0)
+print(time.perf_counter()-t)
+cvProbLick = 1-cvProbNoLick
+
+lick = d['y'][:cvTrials]==2 if 2 in d['y'][:cvTrials] else d['y'][cvTrials]==1
+accuracy = np.abs(lick - cvProbNoLick)
+accuracyChange = accuracy[d['inputs']['change'].astype(bool).flatten()[:cvTrials]]
+accuracyOmitted = accuracy[d['inputs']['omission'].astype(bool).flatten()[:cvTrials]]
+
+
+
+flashStartTimes = [obj.flashStartTimes[~excludedFlashes[i]] for i,obj in enumerate(sessions)]
+
+fig = plt.figure(figsize=(8,8)) 
+ylim = [min(0,1.05*min([w.min() for w in modelWeights])),1.05*max([w.max() for w in modelWeights])]
+for i,lbl in enumerate(sorted(weights.keys())):
+    ax = fig.add_subplot(nWeights,1,i+1)
+    for w in modelWeights:
+        ax.plot(w[i],'k',alpha=0.5)
+    ax.plot(np.mean(np.stack([w[i][:2500] for w in modelWeights]),axis=0),'r',lw=2)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False,labelsize=10)
+    # ax.set_ylim(ylim)
+    ax.set_title(lbl)
+plt.tight_layout()
+
+
+
+
+ 
 
 
 
