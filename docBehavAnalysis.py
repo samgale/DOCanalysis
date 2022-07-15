@@ -86,6 +86,7 @@ class DocSession():
         # trial data
         self.nTrials = trials.shape[0]
         self.trialStartTimes = np.array(trials.start_time)
+        self.trialStopTimes = np.array(trials.stop_time)
         self.trialChangeTimes = np.array(trials.change_time_no_display_delay)
         self.initialImage = np.array(trials.initial_image_name)
         self.changeImage = np.array(trials.change_image_name)
@@ -106,8 +107,8 @@ class DocSession():
         self.nFlashes = np.sum(stim.active)
         self.flashStartTimes = np.array(stim.start_time[stim.active])
         self.flashImage = np.array(stim.image_name[stim.active])
-        self.flashOmitted = np.array(stim.omitted[stim.active])
-        self.flashIsChange = np.array(stim.is_change[stim.active])
+        self.flashOmitted = np.array(stim.omitted[stim.active]).astype(bool)
+        self.flashIsChange = np.array(stim.is_change[stim.active]).astype(bool)
         self.flashIsCatch = np.zeros(self.nFlashes,dtype=bool)
         self.flashIsCatch[np.searchsorted(self.flashStartTimes,self.trialChangeTimes[self.catchTrials])] = True
         
@@ -120,12 +121,13 @@ class DocSession():
         
         # lick data
         self.lickTimes = np.array(licks['timestamps'])
-        self.lickIntervals = np.diff(self.lickTimes[self.lickTimes<trials.stop_time.iloc[self.nTrials-1]])
+        self.lickIntervals = np.diff(self.lickTimes[self.lickTimes<self.trialStopTimes[-1]])
         
+    def getLickProb(self):
         # find flashes with licks
         minLickLatency = 0.15
         self.flashHasLick = np.zeros(self.nFlashes)
-        startStop = np.concatenate((self.flashStartTimes,[trials.stop_time.iloc[-1]]))
+        startStop = np.concatenate((self.flashStartTimes,[self.trialStopTimes[-1]]))
         for i in range(self.nFlashes):
             if np.any((self.lickTimes >= startStop[i]+minLickLatency) & (self.lickTimes < startStop[i+1]+minLickLatency)):
                 self.flashHasLick[i] = True
@@ -201,6 +203,9 @@ for i,sid in enumerate(novelSessionIds):
     nwbPath = os.path.join(nwbDir,'ecephys_session_'+str(sid)+'.nwb')
     obj = DocSession(nwbPath)
     sessions.append(obj)
+    
+for i,obj in enumerate(sessions):
+    obj.getLickProb()
 
 
 # plots
@@ -294,6 +299,7 @@ ax.set_xlabel('time from trial start to first stim (s)')
 ax.set_ylabel('fraction of trials')
 plt.tight_layout()
 
+
 lickIntervals = np.concatenate([obj.lickIntervals for obj in sessions])
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -319,6 +325,7 @@ ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlabel('flashes between flashes with licks')
 ax.set_ylabel('probability')
 plt.tight_layout()
+
   
 flashesToChange = np.concatenate([obj.flashesToChange[obj.changeTrials] for obj in sessions])    
 fig = plt.figure()
@@ -357,8 +364,33 @@ ax.set_ylabel('fraction of trials with omitted flash')
 plt.tight_layout()
 
 
+preTime = 0.75
+postTime = 2.25
+binSize = 1/60
+bins = np.arange(-preTime,postTime+binSize/2,binSize)
+lickPsth = []
+for obj in sessions:
+    lr = []
+    for t in obj.flashStartTimes[obj.flashOmitted]:
+        lt = obj.lickTimes[(obj.lickTimes>=t-preTime) & (obj.lickTimes<=t+postTime)] - t
+        lr.append(np.histogram(lt,bins)[0] / binSize)
+    lickPsth.append(np.mean(lr,axis=0))
+lickPsthMean = np.mean(lickPsth,axis=0)
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.plot(bins[:-1]+binSize/2,lickPsthMean,color='k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([-preTime,postTime])
+ax.set_ylim([0,1.01*lickPsthMean.max()])
+ax.set_xlabel('time from omitted flash (s)')
+ax.set_ylabel('licks/s')
+plt.tight_layout()
+
 omittedFlashLickProb = np.stack([np.nanmean(obj.omittedFlashLickProb,axis=0) for obj in sessions])
-postOmittedFlashLickProb = np.stack([np.nanmean(obj.postOmittedlashLickProb,axis=0) for obj in sessions])
+postOmittedFlashLickProb = np.stack([np.nanmean(obj.postOmittedFlashLickProb,axis=0) for obj in sessions])
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 x = np.arange(1,13)
@@ -509,7 +541,6 @@ ax.set_xlabel('flashes before abort, omission, or change')
 ax.set_ylabel('normalized lick probability')
 ax.legend()
 plt.tight_layout()
-
 
 
 
