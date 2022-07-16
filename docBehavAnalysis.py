@@ -100,7 +100,7 @@ class DocSession():
         self.correctReject = np.array(trials.correct_reject)
         self.abortRate = self.abortedTrials.sum() / self.nTrials
         self.hitRate = self.hit.sum() / (self.hit.sum() + self.miss.sum())
-        self.falseAlarmRate = self.falseAlarm.sum() / (self.falseAlarm.sum() + obj.correctReject.sum())
+        self.falseAlarmRate = self.falseAlarm.sum() / (self.falseAlarm.sum() + self.correctReject.sum())
         self.dprime = calcDprime(self.hit.sum(),self.miss.sum(),self.falseAlarm.sum(),self.correctReject.sum())
         
         # flash data
@@ -182,14 +182,27 @@ ecephys_sessions_table.columns
 
 goodSessions = ecephys_sessions_table.abnormal_histology.isnull() & ecephys_sessions_table.abnormal_activity.isnull()
 
-novelSessionIds = ecephys_sessions_table.index[goodSessions &
-                                               (ecephys_sessions_table.experience_level=='Novel') &
-                                               (ecephys_sessions_table.image_set=='H')]
+
+familiarGSessionIds = ecephys_sessions_table.index[goodSessions &
+                                                (ecephys_sessions_table.session_number==1) &
+                                                (ecephys_sessions_table.experience_level=='Familiar') &
+                                                (ecephys_sessions_table.image_set=='G')]
+
+novelHSessionIds = ecephys_sessions_table.index[goodSessions &
+                                                (ecephys_sessions_table.session_number==2) &
+                                                (ecephys_sessions_table.experience_level=='Novel') &
+                                                (ecephys_sessions_table.image_set=='H')]
+
+novelGSessionIds = ecephys_sessions_table.index[goodSessions &
+                                                (ecephys_sessions_table.session_number==2) &
+                                                (ecephys_sessions_table.experience_level=='Novel') &
+                                                (ecephys_sessions_table.image_set=='G')]
 
 
 imageSetG = ['im036_r', 'im012_r', 'im044_r', 'im047_r', 'im083_r', 'im111_r', 'im115_r', 'im078_r']
 imageSetH = ['im104_r', 'im114_r', 'im083_r', 'im005_r', 'im087_r', 'im024_r', 'im111_r', 'im034_r']
-familiarH = np.intersect1d(imageSetH,imageSetG)
+familiarGH = np.intersect1d(imageSetH,imageSetG)
+novelG = np.setdiff1d(imageSetG,imageSetH)
 novelH = np.setdiff1d(imageSetH,imageSetG)
 
 
@@ -197,15 +210,17 @@ novelH = np.setdiff1d(imageSetH,imageSetG)
 # load session data
 nwbDir = r"D:\visual_behavior_nwbs\visual-behavior-neuropixels-0.1.0\ecephys_sessions"
 
+sessionIds = familiarGSessionIds
+imageSet = 'G'
+imageSetIsNovel = False
 sessions = []
-for i,sid in enumerate(novelSessionIds):
-    print('loading session ' + str(i+1) + ' of ' + str(len(novelSessionIds)))
+for i,sid in enumerate(sessionIds):
+    print('loading session ' + str(i+1) + ' of ' + str(len(sessionIds)))
     nwbPath = os.path.join(nwbDir,'ecephys_session_'+str(sid)+'.nwb')
     obj = DocSession(nwbPath)
+    obj.getLickProb()
     sessions.append(obj)
     
-for i,obj in enumerate(sessions):
-    obj.getLickProb()
 
 
 # plots
@@ -236,29 +251,37 @@ for d,lbl in zip((nHits,hitRate,falseAlarmRate,dprime),('# hits','hit rate','fal
     plt.tight_layout()
 
 
-imgNames = np.array(imageSetH)
-imgAbortRate = np.full((len(sessions),len(imgNames)),np.nan)
-imgRespRate = np.full((len(sessions),len(imgNames),len(imgNames)),np.nan)
-imgHitRate = []
-imgFalseAlarmRate = []
+imgNames = np.array(imageSetG) if imageSet=='G' else np.array(imageSetH)
+bins = [None] + list(range(0,3600,600))
+imgRespRate = np.full((len(sessions),len(bins),len(imgNames),len(imgNames)),np.nan)
+imgHitRate = np.full((len(sessions),len(bins),len(imgNames)),np.nan)
+imgFalseAlarmRate = imgHitRate.copy()
+imgAbortRate = imgHitRate.copy()
 diag = np.eye(len(imgNames),dtype=bool)
-for k,obj in enumerate(sessions):
-    for i,initImg in enumerate(imgNames):
-        imgTrials = obj.initialImage==initImg
-        imgAbortRate[k,i] = np.sum(imgTrials & obj.abortedTrials) / imgTrials.sum()
-        for j,chImg in enumerate(imgNames):
-            trialInd = imgTrials & (obj.changeImage==chImg) & (obj.changeTrials | obj.catchTrials)
-            imgRespRate[k,i,j] = np.sum((obj.hit | obj.falseAlarm)[trialInd]) / trialInd.sum()
-        r = imgRespRate[k].copy()
-        imgFalseAlarmRate.append(r[diag])
-        r[diag] = np.nan
-        imgHitRate.append(np.nanmean(r,axis=0))            
+for sessionInd,obj in enumerate(sessions):
+    for binInd,binStart in enumerate(bins):
+        if binStart is None:
+            binTrials = np.ones(obj.nTrials,dtype=bool)
+        elif binInd==len(bins)-1:
+            binTrials = obj.trialChangeTimes > binStart
+        else:
+            binTrials = (obj.trialChangeTimes >= binStart) & (obj.trialChangeTimes < bins[binInd+1])
+        for i,initImg in enumerate(imgNames):
+            imgTrials = binTrials & (obj.initialImage==initImg)
+            imgAbortRate[sessionInd,binInd,i] = np.sum(imgTrials & obj.abortedTrials) / imgTrials.sum()
+            for j,chImg in enumerate(imgNames):
+                trialInd = imgTrials & (obj.changeImage==chImg) & (obj.changeTrials | obj.catchTrials)
+                imgRespRate[sessionInd,binInd,i,j] = np.sum((obj.hit | obj.falseAlarm)[trialInd]) / trialInd.sum()
+            r = imgRespRate[sessionInd,binInd].copy()
+            imgFalseAlarmRate[sessionInd,binInd] = r[diag]
+            r[diag] = np.nan
+            imgHitRate[sessionInd,binInd] = np.nanmean(r,axis=0)            
 
-imgOrder = np.argsort(np.nanmean(imgHitRate,axis=0))
+imgOrder = np.argsort(np.nanmean(imgHitRate[:,0],axis=0))
 
 fig = plt.figure()
 ax = plt.subplot(1,1,1)
-im = ax.imshow(np.mean(imgRespRate,axis=0)[imgOrder,:][:,imgOrder],cmap='magma')
+im = ax.imshow(np.mean(imgRespRate[:,0],axis=0)[imgOrder,:][:,imgOrder],cmap='magma')
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(np.arange(len(imgNames)))
 ax.set_yticks(np.arange(len(imgNames)))
@@ -275,14 +298,47 @@ plt.tight_layout()
 fig = plt.figure()
 ax = plt.subplot(1,1,1)
 xticks = np.arange(len(imgNames))
-for r,clr,lbl in zip((imgHitRate,imgFalseAlarmRate,imgAbortRate),'kbr',('change','catch','aborted')):
-    ax.plot(xticks,np.nanmean(r,axis=0)[imgOrder],color=clr,label=lbl)
+for r,clr,lbl in zip((imgHitRate,imgFalseAlarmRate,imgAbortRate),'kbr',('hit rate','false alarm rate','abort rate')):
+    ax.plot(xticks,np.nanmean(r[:,0],axis=0)[imgOrder],color=clr,label=lbl)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0,1])
-# ax.set_xticklabels(imgNames[imgOrder])
+ax.set_xticks(xticks)
+ax.set_xticklabels(imgNames[imgOrder])
 ax.set_ylabel('response rate')
+ax.legend()
+plt.tight_layout()
+
+fig = plt.figure()
+ax = plt.subplot(1,1,1)
+im = ax.imshow(np.nanmean(imgHitRate[:,1:],axis=0)[:,imgOrder],cmap='magma')
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(np.arange(len(imgNames)))
+ax.set_yticks(np.arange(len(bins)-1))
+ax.set_xlim([-0.5,len(imgNames)-0.5])
+ax.set_ylim([len(bins)-1.5,-0.5])
+ax.set_xticklabels(imgNames[imgOrder])
+ax.set_yticklabels(bins[1:])
+ax.set_xlabel('change image')
+ax.set_ylabel('start of time bin (s)')
+ax.set_title('hit rate')
+cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+plt.tight_layout()
+
+fig = plt.figure()
+ax = plt.subplot(1,1,1)
+xticks = np.arange(len(bins)-1)
+ax.plot(xticks,np.nanmean(imgHitRate[:,1:,imgOrder][:,:,2:],axis=(0,2)),color='r',label='novel')
+ax.plot(xticks,np.nanmean(imgHitRate[:,1:,imgOrder][:,:,:2],axis=(0,2)),color='k',label='familiar')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([0,1])
+ax.set_xticks(xticks)
+ax.set_xticklabels(bins[1:])
+ax.set_xlabel('start of time bin (s)')
+ax.set_ylabel('hit rate')
 ax.legend()
 plt.tight_layout()
 
@@ -411,7 +467,7 @@ fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 x = np.arange(1,13)
 ax.plot(x,np.mean(flashLickProb,axis=0),'k',label='all trials')
-ax.plot(x,np.mean(flashLickProbPrevTrialAborted,axis=0),'b',label='after aborted trial')
+ax.plot(x,np.mean(flashLickProbPrevTrialAborted,axis=0),'b',label='previous trial aborted')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -449,47 +505,7 @@ timingLickProb = gauss(x,ampGauss,offsetGauss,mu,sigma)
 impulsivityLickProbNorm = impulsivityLickProb / impulsivityLickProb.max()
 timingLickProbNorm = timingLickProb / timingLickProb.max()
 
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-x = np.arange(1,13)
-ax.plot(x,y,'k',label='observed')
-ax.plot(x,fity,'r',label='fit:'+'\nexp amp = '+str(round(ampExp,2))+'\ngauss amp = '+str(round(ampGauss,2))+'\ngauss mean = '+str(round(mu+1,2)))
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('flashes before abort, omission, or change')
-ax.set_ylabel('lick probability')
-ax.legend()
-plt.tight_layout()
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-x = np.arange(1,13)
-ax.plot(x,impulsivityLickProb,'k',label='impulsivity')
-ax.plot(x,timingLickProb,'b',label='timing')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('flashes before abort, omission, or change')
-ax.set_ylabel('lick probability')
-ax.legend()
-plt.tight_layout()
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-x = np.arange(1,13)
-ax.plot(x,impulsivityLickProbNorm,'k',label='impulsivity')
-ax.plot(x,timingLickProbNorm,'b',label='timing')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('flashes before abort, omission, or change')
-ax.set_ylabel('normalized lick probability')
-ax.legend()
-plt.tight_layout()
-
-
-# fit lick probability curve to exponential + gamma
+# or fit lick probability curve to exponential + gamma
 x = np.arange(12)
 y = np.mean(flashLickProb,axis=0)
 bounds = ((0,-1e-10,0,0,-1e-10,-np.inf,0),(1,1e-10,12,1,1e-10,np.inf,12))
@@ -503,11 +519,13 @@ timingLickProb = gamma(x,ampGamma,offsetGamma,shape,loc)
 impulsivityLickProbNorm = impulsivityLickProb / impulsivityLickProb.max()
 timingLickProbNorm = timingLickProb / timingLickProb.max()
 
+# plot fit
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 x = np.arange(1,13)
-ax.plot(x,y,'k',label='observed')
-ax.plot(x,fity,'r',label='fit:'+'\nexp amp = '+str(round(ampExp,2))+'\ngauss amp = '+str(round(ampGauss,2))+'\ngauss mean = '+str(round(mu+1,2)))
+ax.plot(x,np.mean(flashLickProb,axis=0),'k',label='all trials')
+ax.plot(x,np.mean(flashLickProbPrevTrialAborted,axis=0),'g',label='previous trial aborted')
+ax.plot(x,fity,'r',label='fit')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -547,7 +565,7 @@ plt.tight_layout()
 # psytrack
 
 # exclude flashes after trial outcome decided and ignore autorewarded trials
-regressors = ['impulsivity','timing','omission','change','novelty']
+regressors = ['impulsivity','timing','post-omission','change','novelty']
 x = {r: [] for r in regressors}
 y = []
 for obj in sessions:
@@ -576,12 +594,13 @@ for obj in sessions:
                 flashHasLick[flashInd[changeFlash[0]+1:]] = np.nan
     x['impulsivity'].append(impulsivity)
     x['timing'].append(timing)
-    postOmitted = np.where(obj.flashOmitted)[0] + 1
-    omission = np.zeros(obj.nFlashes)
-    omission[postOmitted[postOmitted<omission.size]]=True
-    x['omission'].append(omission)
+    postOmittedInd = np.where(obj.flashOmitted)[0] + 1
+    postOmission = np.zeros(obj.nFlashes)
+    postOmission[postOmittedInd[postOmittedInd<postOmission.size]]=True
+    x['post-omission'].append(postOmission)
     x['change'].append(obj.flashIsChange.astype(float))
-    x['novelty'].append(np.in1d(obj.flashImage,novelH).astype(float))
+    novelImgs = novelG if imageSet=='G' else novelH
+    x['novelty'].append(np.in1d(obj.flashImage,novelImgs).astype(float))
     y.append(flashHasLick)
         
 excludedFlashes = [np.isnan(a) for a in y]
@@ -686,100 +705,15 @@ ylim = [min(0,1.05*min([w.min() for w in modelWeights])),1.05*max([w.max() for w
 for i,lbl in enumerate(sorted(weights.keys())):
     ax = fig.add_subplot(nWeights,1,i+1)
     for j,w in enumerate(modelWeights):
-        ax.plot(flashStartTimes[j],w[i],'k',alpha=0.5)
+        ax.plot(flashStartTimes[j],w[i],'k',alpha=0.25)
     # ax.plot(np.mean(np.stack([w[i][:2500] for w in modelWeights]),axis=0),'r',lw=2)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False,labelsize=10)
-    # ax.set_ylim(ylim)
-    ax.set_title(lbl)
+    ax.set_xlabel('time (s)')
+    ax.set_title(sorted(regressors+['bias'])[i])
 plt.tight_layout()
 
-
-# fit change/catch flashes
-regressors = ['impulsivity','timing','change','novelty']
-x = {r: [] for r in regressors}
-y = []
-trialTimes = []
-for obj in sessions:
-    changeCatchTrialInd = np.where((obj.changeTrials | obj.catchTrials) & ~obj.autoRewarded)[0]
-    timing = np.zeros(len(changeCatchTrialInd))
-    for i,trialInd in enumerate(changeCatchTrialInd):
-        flashInd = np.where(obj.flashTrialIndex==trialInd)[0]
-        changeCatchFlash = np.where(obj.flashIsChange[flashInd] | obj.flashIsCatch[flashInd])[0]
-        timing[i] = timingLickProbNorm[changeCatchFlash]
-    x['impulsivity'].append(np.ones(len(changeCatchTrialInd)))
-    x['timing'].append(timing)
-    x['change'].append(np.in1d(changeCatchTrialInd,np.where(obj.changeTrials)[0]))
-    x['novelty'].append(np.in1d(obj.changeImage[changeCatchTrialInd],novelH).astype(float))
-    y.append((obj.hit | obj.falseAlarm)[changeCatchTrialInd].astype(float))
-    trialTimes.append(obj.trialChangeTimes[changeCatchTrialInd] - obj.trialStartTimes[0])
-
-hyperparams = []
-evidence = []
-modelWeights = []
-hessian = []
-cvLikelihood = []
-cvProbNoLick = []
-accuracy = []
-accuracyChange = []
-accuracyCatch = []
-skip = []
-for i in range(len(sessions)):
-    print(i)
-    d = {'inputs': {key: val[i][:,None] for key,val in x.items() if key!='novelty'},
-         'y': y[i]}
-
-    weights = {key: 1 for key in d['inputs']}
-
-    nWeights = sum(weights.values())
-
-    hyper= {'sigInit': 2**4.,
-            'sigma': [2**-4.] * nWeights}
-
-    optList = ['sigma']
-
-    try:
-        t = time.perf_counter()
-        hyp, evd, wMode, hess_info = psytrack.hyperOpt(d, hyper, weights, optList)
-        print(time.perf_counter()-t)
-    except:
-        skip.append(i)
-        continue
-    
-    hyperparams.append(hyp)
-    evidence.append(evd)
-    modelWeights.append(wMode)
-    hessian.append(hess_info)
-
-    cvFolds = 5
-    cvTrials = d['y'].size - (d['y'].size % cvFolds)
-    t = time.perf_counter()
-    likelihood,probNoLick = psytrack.crossValidate(psytrack.trim(d,END=cvTrials), hyper, weights, optList, F=cvFolds, seed=0)
-    print(time.perf_counter()-t)
-    
-    cvLikelihood.append(likelihood)
-    cvProbNoLick.append(probNoLick)
-    
-    lick = d['y'][:cvTrials]==2 if 2 in d['y'][:cvTrials] else d['y'][cvTrials]==1
-    accuracy.append(np.abs(lick - probNoLick))
-    accuracyChange.append(accuracy[-1][d['inputs']['change'].astype(bool).flatten()[:cvTrials]])
-    accuracyCatch.append(accuracy[-1][~d['inputs']['change'].astype(bool).flatten()[:cvTrials]])
-
-
-fig = plt.figure(figsize=(8,8)) 
-ylim = [min(0,1.05*min([w.min() for w in modelWeights])),1.05*max([w.max() for w in modelWeights])]
-for i,lbl in enumerate(sorted(weights.keys())):
-    ax = fig.add_subplot(nWeights,1,i+1)
-    for j,w in enumerate(modelWeights):
-        ax.plot(trialTimes[j],w[i],'k',alpha=0.5)
-    # ax.plot(np.mean(np.stack([w[i][:2500] for w in modelWeights]),axis=0),'r',lw=2)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False,labelsize=10)
-    # ax.set_ylim(ylim)
-    ax.set_title(lbl)
-plt.tight_layout()
 
 
 
