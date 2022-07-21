@@ -195,22 +195,20 @@ class DocSession():
 # get novel session IDs
 cache_dir = r"D:\allensdk_cache"
 
-cache = VisualBehaviorNeuropixelsProjectCache.from_s3_cache(
-            cache_dir=cache_dir)
+cache = VisualBehaviorNeuropixelsProjectCache.from_s3_cache(cache_dir=cache_dir)
 
+sessionInfo = cache.get_ecephys_session_table()[0]
+sessionInfo.columns
 
-ecephys_sessions_table = cache.get_ecephys_session_table()[0]
-ecephys_sessions_table.columns
+goodSessions = np.array(sessionInfo.abnormal_histology.isnull() & sessionInfo.abnormal_activity.isnull())
 
-goodSessions = np.array(ecephys_sessions_table.abnormal_histology.isnull() & ecephys_sessions_table.abnormal_activity.isnull())
+familiarGSessions = np.array(goodSessions & (sessionInfo.session_number==1) & (sessionInfo.experience_level=='Familiar') & (sessionInfo.image_set=='G'))
 
-familiarGSessions = np.array(goodSessions & (ecephys_sessions_table.session_number==1) & (ecephys_sessions_table.experience_level=='Familiar') & (ecephys_sessions_table.image_set=='G'))
+novelHSessions = np.array(goodSessions & (sessionInfo.session_number==2) & (sessionInfo.experience_level=='Novel') & (sessionInfo.image_set=='H'))
 
-novelHSessions = np.array(goodSessions & (ecephys_sessions_table.session_number==2) & (ecephys_sessions_table.experience_level=='Novel') & (ecephys_sessions_table.image_set=='H'))
+familiarHSessions = np.array(goodSessions & (sessionInfo.session_number==1) & (sessionInfo.experience_level=='Familiar') & (sessionInfo.image_set=='H'))
 
-familiarHSessions = np.array(goodSessions & (ecephys_sessions_table.session_number==1) & (ecephys_sessions_table.experience_level=='Familiar') & (ecephys_sessions_table.image_set=='H'))
-
-novelGSessions = np.array(goodSessions & (ecephys_sessions_table.session_number==2) & (ecephys_sessions_table.experience_level=='Novel') & (ecephys_sessions_table.image_set=='G'))
+novelGSessions = np.array(goodSessions & (sessionInfo.session_number==2) & (sessionInfo.experience_level=='Novel') & (sessionInfo.image_set=='G'))
 
 
 imageSetG = ['im083_r', 'im111_r', 'im036_r', 'im012_r', 'im044_r', 'im047_r', 'im115_r', 'im078_r']
@@ -224,16 +222,25 @@ novelImagesH = np.setdiff1d(imageSetH,imageSetG)
 # load session data
 nwbDir = r"D:\visual_behavior_nwbs\visual-behavior-neuropixels-0.1.0\ecephys_sessions"
 
-sessionIds = ecephys_sessions_table.index[goodSessions]
+sessionIds = sessionInfo.index[goodSessions]
 allGoodSessions = []
 for i,sid in enumerate(sessionIds):
     print('loading session ' + str(i+1) + ' of ' + str(len(sessionIds)))
     nwbPath = os.path.join(nwbDir,'ecephys_session_'+str(sid)+'.nwb')
     obj = DocSession(nwbPath)
     obj.getLickProb()
+    obj.day = sessionInfo.loc[sid].session_number
+    obj.novel = True if sessionInfo.loc[sid].experience_level=='Novel' else False
+    obj.imageSet = sessionInfo.loc[sid].image_set
+    if obj.novel:
+        obj.familiarImages = familiarImages
+        obj.novelImages = novelImagesG if obj.imageSet=='G' else novelImagesH
+    else:
+        obj.familiarImages = np.array(imageSetG) if obj.imageSet=='G' else np.array(imageSetH)
+        obj.novelImages = None
     allGoodSessions.append(obj)
-allGoodSessions = np.array(allGoodSessions)    
-    
+allGoodSessions = np.array(allGoodSessions)
+
 
 # plots
 sessions = allGoodSessions
@@ -421,6 +428,130 @@ for selectedSessions,imageSet,novel,novelImgs in zip((novelHSessions,familiarGSe
     ax.set_ylabel('hit rate')
     ax.legend()
     plt.tight_layout()
+    
+
+sessions = allGoodSessions[[obj.novel for obj in allGoodSessions]]
+familiarHitRate = np.full((sessions.size,2000),np.nan)
+novelHitRate = familiarHitRate.copy()
+familiarAbortRate = familiarHitRate.copy()
+novelAbortRate = familiarHitRate.copy()
+binWidth = 30
+bins = np.arange(0,3900,binWidth)
+binCount = np.zeros_like(bins)
+familiarHitRateBinned = np.zeros((sessions.size,bins.size))
+novelHitRateBinned = familiarHitRateBinned.copy()
+familiarAbortRateBinned = familiarHitRateBinned.copy()
+novelAbortRateBinned = familiarHitRateBinned.copy()
+for sessionInd,obj in enumerate(sessions):
+    for imgs,(hr,ar),(hrb,arb) in zip((obj.familiarImages,obj.novelImages),((familiarHitRate,familiarAbortRate),(novelHitRate,novelAbortRate)),((familiarHitRateBinned,familiarAbortRateBinned),(novelHitRateBinned,novelAbortRateBinned))):   
+        trialInd = obj.changeTrials & ~obj.autoRewarded & np.in1d(obj.changeImage,imgs)
+        hr[sessionInd,:trialInd.sum()] = obj.hit[trialInd]
+        binCount[:] = 0
+        for i,r in zip(np.digitize(obj.trialChangeTimes[trialInd]-obj.trialStartTimes[0],bins),obj.hit[trialInd]):
+            if i<bins.size:
+                hrb[sessionInd,i] += r
+                binCount[i] += 1
+        hrb[sessionInd] /= binCount
+        hrb[sessionInd][binCount==0] = np.nan
+        
+        trialInd = np.in1d(obj.initialImage,imgs)
+        ar[sessionInd,:trialInd.sum()] = obj.abortedTrials[trialInd]
+        binCount[:] = 0
+        for i,r in zip(np.digitize(obj.trialStartTimes[trialInd]-obj.trialStartTimes[0],bins),obj.abortedTrials[trialInd]):
+            if i<bins.size:
+                arb[sessionInd,i] += r
+                binCount[i] += 1
+        arb[sessionInd] /= binCount
+        arb[sessionInd][binCount==0] = np.nan
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for r,clr,lbl in zip((familiarHitRate,novelHitRate,familiarAbortRate,novelAbortRate),'rbmc',('hit rate familiar','hit rate novel','abort rate familiar','abort rate novel')):
+    ax.plot(np.arange(r.shape[1])+1,np.nanmean(r,axis=0),clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,40])
+ax.set_ylim([0,1])
+ax.set_xlabel('trial')
+ax.set_ylabel('response rate')
+ax.legend()
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for r,clr,lbl in zip((familiarHitRateBinned,novelHitRateBinned,familiarAbortRateBinned,novelAbortRateBinned),'rbmc',('hit rate familiar','hit rate novel','abort rate familiar','abort rate novel')):
+    ax.plot(bins+binWidth/2,np.nanmean(r,axis=0),clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,600])
+ax.set_ylim([0,1])
+ax.set_xlabel('time (s)')
+ax.set_ylabel('response rate')
+ax.legend()
+plt.tight_layout()
+
+
+sessions = allGoodSessions[[not obj.novel for obj in allGoodSessions]]
+hitRate = np.full((sessions.size,2000),np.nan)
+abortRate = familiarHitRate.copy()
+hitRateBinned = np.zeros((sessions.size,bins.size))
+abortRateBinned = hitRateBinned.copy()
+for sessionInd,obj in enumerate(sessions):
+    trialInd = obj.changeTrials & ~obj.autoRewarded
+    hitRate[sessionInd,:trialInd.sum()] = obj.hit[trialInd]
+    binCount[:] = 0
+    for i,r in zip(np.digitize(obj.trialChangeTimes[trialInd]-obj.trialStartTimes[0],bins),obj.hit[trialInd]):
+        if i<bins.size:
+            hitRateBinned[sessionInd,i] += r
+            binCount[i] += 1
+    hitRateBinned[sessionInd] /= binCount
+    hitRateBinned[sessionInd][binCount==0] = np.nan
+    
+    abortRate[sessionInd,:obj.nTrials] = obj.abortedTrials
+    binCount[:] = 0
+    for i,r in zip(np.digitize(obj.trialStartTimes-obj.trialStartTimes[0],bins),obj.abortedTrials):
+        if i<bins.size:
+            abortRateBinned[sessionInd,i] += r
+            binCount[i] += 1
+    abortRateBinned[sessionInd] /= binCount
+    abortRateBinned[sessionInd][binCount==0] = np.nan
+    
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for r,clr,lbl in zip((hitRate,abortRate),'rm',('hit rate','abort rate')):
+    ax.plot(np.arange(r.shape[1])+1,np.nanmean(r,axis=0),clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,40])
+ax.set_ylim([0,1])
+ax.set_xlabel('trial')
+ax.set_ylabel('response rate')
+ax.legend()
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for r,clr,lbl in zip((hitRateBinned,abortRateBinned),'rm',('hit rate','abort rate')):
+    ax.plot(bins+binWidth/2,np.nanmean(r,axis=0),clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,600])
+ax.set_ylim([0,1])
+ax.set_xlabel('time (s)')
+ax.set_ylabel('response rate')
+ax.legend()
+plt.tight_layout()
+
+
+
+
+        
+
+
 
 
 firstStimDelay = np.concatenate([obj.firstStimDelay for obj in sessions])
