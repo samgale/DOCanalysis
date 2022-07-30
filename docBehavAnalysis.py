@@ -474,11 +474,11 @@ ax.legend()
 plt.tight_layout()
 
 
-for selectedSessions,imageSet,novel,novelImgs in zip((novelHSessions,familiarGSessions,novelGSessions,familiarHSessions),'HGGH',(True,False,True,False),(novelImagesH,novelImagesH,novelImagesG,novelImagesG)):
+for imageSet,novel in zip('HGGH',(True,False,True,False)):
+    sessions = [obj for obj in goodSessions if obj.imageSet==imageSet and obj.novel-novel==0]
     imageSetLabel = 'image set '+imageSet
     imageSetLabel += ' (novel)' if novel else ' (familiar)'
-    imageSetLabel += ', n='+str(selectedSessions.sum())
-    sessions = allGoodSessions[selectedSessions[goodSessions]]
+    imageSetLabel += ', n='+str(len(sessions))
     imgNames = np.array(imageSetG) if imageSet=='G' else np.array(imageSetH)
     bins = [None] + list(range(0,3600,600))
     
@@ -534,41 +534,7 @@ for selectedSessions,imageSet,novel,novelImgs in zip((novelHSessions,familiarGSe
     else:
         order = np.argsort(np.nanmean(imgHitRate[:,0],axis=0))
         imgOrder = np.concatenate((imgOrder[:2],order[~np.in1d(order,imgOrder[:2])]))
-        
-    fig = plt.figure()
-    ax = plt.subplot(1,1,1)
-    xticks = np.arange(len(imgNames))
-    for r,clr,lbl in zip((hitLickMeanLat,falseAlarmLickMeanLat,abortLickMeanLat),'kbr',('hit','false alarm','abort')):
-        ax.plot(xticks,np.nanmean(r[:,0],axis=0)[imgOrder],color=clr,label=lbl)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_ylim([0.2,0.5])
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(imgNames[imgOrder])
-    ax.set_ylabel('lick latency (s)')
-    ax.set_title(imageSetLabel)
-    ax.legend()
-    plt.tight_layout()
-    
-    fig = plt.figure()
-    ax = plt.subplot(1,1,1)
-    xticks = np.arange(len(bins)-1)
-    for r,clr,lbl in zip((hitLickMeanLat,falseAlarmLickMeanLat,abortLickMeanLat),'kbr',('hit','false alarm','abort')):
-        ax.plot(xticks,np.nanmean(r[:,1:,imgOrder],axis=(0,2)),color=clr,label=lbl)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_ylim([0.2,0.5])
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(bins[1:])
-    ax.set_xlabel('start of time bin (s)')
-    ax.set_ylabel('hit rate')
-    ax.set_title(imageSetLabel)
-    ax.legend()
-    plt.tight_layout()
 
-    
     fig = plt.figure()
     ax = plt.subplot(1,1,1)
     im = ax.imshow(np.nanmean(imgRespRate[:,0],axis=0)[imgOrder,:][:,imgOrder],cmap='magma')
@@ -581,7 +547,7 @@ for selectedSessions,imageSet,novel,novelImgs in zip((novelHSessions,familiarGSe
     ax.set_yticklabels(imgNames[imgOrder])
     ax.set_xlabel('change image')
     ax.set_ylabel('initial image')
-    ax.set_title('response rate')
+    ax.set_title(imageSetLabel)
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
     
@@ -631,17 +597,55 @@ for selectedSessions,imageSet,novel,novelImgs in zip((novelHSessions,familiarGSe
     ax.set_ylabel('hit rate')
     ax.legend()
     plt.tight_layout()
+    imageSetLabel = 'image set '+imageSet
+    imageSetLabel += ' (novel)' if novel else ' (familiar)'
+    imageSetLabel += ', n='+str(len(sessions))
+    imgNames = np.array(imageSetG) if imageSet=='G' else np.array(imageSetH)
+    bins = [None] + list(range(0,3600,600))
+    
+    fig = plt.figure()
+    ax = plt.subplot(1,1,1)
+    xticks = np.arange(len(imgNames))
+    for r,clr,lbl in zip((hitLickMeanLat,falseAlarmLickMeanLat,abortLickMeanLat),'kbr',('hit','false alarm','abort')):
+        ax.plot(xticks,np.nanmean(r[:,0],axis=0)[imgOrder],color=clr,label=lbl)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([0.2,0.5])
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(imgNames[imgOrder])
+    ax.set_ylabel('lick latency (s)')
+    ax.set_title(imageSetLabel)
+    ax.legend()
+    plt.tight_layout()
+    
+    fig = plt.figure()
+    ax = plt.subplot(1,1,1)
+    xticks = np.arange(len(bins)-1)
+    for r,clr,lbl in zip((hitLickMeanLat,falseAlarmLickMeanLat,abortLickMeanLat),'kbr',('hit','false alarm','abort')):
+        ax.plot(xticks,np.nanmean(r[:,1:,imgOrder],axis=(0,2)),color=clr,label=lbl)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([0.2,0.5])
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(bins[1:])
+    ax.set_xlabel('start of time bin (s)')
+    ax.set_ylabel('hit rate')
+    ax.set_title(imageSetLabel)
+    ax.legend()
+    plt.tight_layout()
     
 
-sessions = allGoodSessions[[obj.novel for obj in allGoodSessions]]
-familiarHitRate = np.full((sessions.size,2000),np.nan)
+sessions = [obj for obj in goodSessions if obj.novel]
+familiarHitRate = np.full((len(sessions),2000),np.nan)
 novelHitRate = familiarHitRate.copy()
 familiarAbortRate = familiarHitRate.copy()
 novelAbortRate = familiarHitRate.copy()
 binWidth = 30
 bins = np.arange(0,3900,binWidth)
 binCount = np.zeros_like(bins)
-familiarHitRateBinned = np.zeros((sessions.size,bins.size))
+familiarHitRateBinned = np.zeros((len(sessions),bins.size))
 novelHitRateBinned = familiarHitRateBinned.copy()
 familiarAbortRateBinned = familiarHitRateBinned.copy()
 novelAbortRateBinned = familiarHitRateBinned.copy()
@@ -696,10 +700,10 @@ ax.legend()
 plt.tight_layout()
 
 
-sessions = allGoodSessions[[not obj.novel for obj in allGoodSessions]]
-hitRate = np.full((sessions.size,2000),np.nan)
+sessions = [obj for obj in goodSessions if not obj.novel]
+hitRate = np.full((len(sessions),2000),np.nan)
 abortRate = familiarHitRate.copy()
-hitRateBinned = np.zeros((sessions.size,bins.size))
+hitRateBinned = np.zeros((len(sessions),bins.size))
 abortRateBinned = hitRateBinned.copy()
 for sessionInd,obj in enumerate(sessions):
     trialInd = obj.changeTrials & ~obj.autoRewarded
