@@ -5,7 +5,9 @@ Created on Fri Dec  9 16:22:30 2022
 @author: svc_ccg
 """
 
+import os
 import numpy as np
+import pandas as pd
 import h5py
 from allensdk.brain_observatory.behavior.behavior_project_cache.behavior_neuropixels_project_cache import VisualBehaviorNeuropixelsProjectCache
 
@@ -27,6 +29,7 @@ sessions = cache.get_ecephys_session_table(filter_abnormalities=False)
 
 windowDur = 0.75
 binSize = 0.001
+nBins = int(windowDur/binSize)
 
 h5Path = r'C:/Users/svc_ccg/Desktop/Analysis/vbnAllUnitSpikeTensor.hdf5'
 h5File = h5py.File(h5Path,'w')
@@ -47,15 +50,14 @@ for sessionId,sessionData in sessions.iterrows():
     goodUnits = units[(units['quality']=='good') & (units['snr']>1) & (units['isi_violations']<1)]
     spikeTimes = session.spike_times
     
-    spikes = np.zeros((len(goodUnits),len(flashTimes),int(windowDur/binSize)),dtype=bool)
+    h5Group = h5File.create_group(str(sessionId))
+    h5Group.create_dataset('unitIds',data=goodUnits.index,compression='gzip',compression_opts=4)
+    spikes = h5Group.create_dataset('spikes',shape=(len(goodUnits),len(flashTimes),nBins),dtype=bool,chunks=(1,len(flashTimes),nBins),compression='gzip',compression_opts=4)
+    
     i = 0
     for unitId,unitData in goodUnits.iterrows(): 
         spikes[i] = getSpikeBins(spikeTimes[unitId],flashTimes,windowDur,binSize)
         i += 1
-    
-    h5Group = h5File.create_group(str(sessionId))
-    h5Group.create_dataset('unitIds',data=goodUnits.index,compression='gzip',compression_opts=4)
-    h5Group.create_dataset('spikes',data=spikes,chunks=(1,spikes.shape[1],spikes.shape[2]),compression='gzip',compression_opts=4)
 
 h5File.close()
     
@@ -64,10 +66,25 @@ h5File.close()
 
 
 #
+baseDir = r"C:\Users\svc_ccg\Desktop\Analysis\vbn"
 
-sessionId = sessions.index[0]
+stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 
-session = cache.get_ecephys_session(ecephys_session_id=sessionId)
+unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
+
+unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
+
+
+sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
+
+for sid in sessionIds:
+    units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
+    spikes = unitData[str(sid)]['spikes']
+    a = np.mean(spikes[np.array(units['structure_acronym']=='VISp'),:,:],axis=(0,1))
+
+
+
+
 
 trials = session.trials
 stim = session.stimulus_presentations
