@@ -75,11 +75,40 @@ unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 
+def findResponsiveUnits(psth,)
+
+
 sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
 
+regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
+layers = ('all','1','2/3','4','5',('6a','6b'))
+
+unitCount = np.zeros((len(sessionIds),len(regions)),dtype=int)
+for i,sid in enumerate(sessionIds):
+    units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
+    for j,reg in enumerate(regions):
+        unitCount[i,j] = np.sum(units['structure_acronym']==reg)
+    
+adaptPsth = 
 for sid in sessionIds:
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     spikes = unitData[str(sid)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sid) & stimTable['active']]
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    isChange = stim['is_change'] & ~autoRewarded
+    changeFlash = np.where(isChange)[0]
+    preChangeFlash = changeFlash - 1
+    hasOmitted = np.array([any(stim[(stim['behavior_trial_id']==trial)]['omitted']) for trial in stim[isChange]['behavior_trial_id']])
+    
+    for region in regions:
+        inRegion = np.array(units['structure_acronym']==region)
+        for layer in layers:
+            inLayer = np.array(units['cortical_layer']==layer) & inRegion if 'VIS' in region and layer!='all' else inRegion
+            s = spikes[inLayer,:,:]
+            psth.append(np.mean([s[:,flash:flash+11,:].reshape((s.shape[0],-1)) for flash in preChangeFlash[~hasOmitted] if flash+11<s.shape[1]],axis=0))
+            
+    
     a = np.mean(spikes[np.array(units['structure_acronym']=='VISp'),:,:],axis=(0,1))
 
 
@@ -96,7 +125,7 @@ hasOmission = [any(stim[stim.active].omitted[stimTrialIndex==i]) for i in range(
 
 
 
-regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam','LGd','LP','MRN')
+
 
 
 
