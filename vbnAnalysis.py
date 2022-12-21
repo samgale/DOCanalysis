@@ -75,7 +75,15 @@ unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 
-def findResponsiveUnits(psth,)
+def findResponsiveUnits(base,resp,baseWin,respWin):
+    baseMean = base[:,:,baseWin].mean(axis=1)
+    respMean = resp[:,:,respWin].mean(axis=1)
+    peak = (m-b.mean())[analysisWindow].max()
+    
+    base = base[:,:,baseWin].mean(axis=2)
+    resp = resp[:,:,respWin].mean(axis=2)
+    pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
+    
 
 
 sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
@@ -83,13 +91,18 @@ sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].
 regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
 layers = ('all','1','2/3','4','5',('6a','6b'))
 
+baselineWindow = slice(690,750)
+responseWindow = slice(40,100)
+
 unitCount = np.zeros((len(sessionIds),len(regions)),dtype=int)
 for i,sid in enumerate(sessionIds):
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     for j,reg in enumerate(regions):
         unitCount[i,j] = np.sum(units['structure_acronym']==reg)
-    
-adaptPsth = 
+
+preChangePsth = []
+changePsth = []    
+adaptPsth = []
 for sid in sessionIds:
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     spikes = unitData[str(sid)]['spikes']
@@ -106,22 +119,21 @@ for sid in sessionIds:
         for layer in layers:
             inLayer = np.array(units['cortical_layer']==layer) & inRegion if 'VIS' in region and layer!='all' else inRegion
             s = spikes[inLayer,:,:]
-            psth.append(np.mean([s[:,flash:flash+11,:].reshape((s.shape[0],-1)) for flash in preChangeFlash[~hasOmitted] if flash+11<s.shape[1]],axis=0))
+            for flash in changeFlash:
+                preChangePsth = s[:,flash-1,:]
+                changePsth = s[:,flash,:]
+                if not any(stim[flash-1:flash+10]['ommitted'] and flash+10<s.shape[1]:
+                    adapthPsth = s[:,flash-1:flash+10,:].reshape((s.shape[0],-1)).transpose((1,0,2))
+
             
     
-    a = np.mean(spikes[np.array(units['structure_acronym']=='VISp'),:,:],axis=(0,1))
 
 
 
 
 
-trials = session.trials
-stim = session.stimulus_presentations
-changeTimes = trials.change_time_no_display_delay[trials.stimulus_change | trials.catch]
-flashTimes = stim.start_time[stim.active]
 
-stimTrialIndex = np.searchsorted(trials.start_time,flashTimes) - 1
-hasOmission = [any(stim[stim.active].omitted[stimTrialIndex==i]) for i in range(len(trials))]
+
 
 
 
