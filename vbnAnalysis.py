@@ -5,8 +5,10 @@ Created on Fri Dec  9 16:22:30 2022
 @author: svc_ccg
 """
 
+import copy
 import os
 import numpy as np
+import scipy
 import pandas as pd
 import h5py
 from allensdk.brain_observatory.behavior.behavior_project_cache.behavior_neuropixels_project_cache import VisualBehaviorNeuropixelsProjectCache
@@ -75,24 +77,27 @@ unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 
-def findResponsiveUnits(base,resp,baseWin,respWin):
-    baseMean = base[:,:,baseWin].mean(axis=1)
-    respMean = resp[:,:,respWin].mean(axis=1)
-    peak = (m-b.mean())[analysisWindow].max()
-    
-    base = base[:,:,baseWin].mean(axis=2)
-    resp = resp[:,:,respWin].mean(axis=2)
-    pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
-    
-
-
 sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
 
 regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
 layers = ('all','1','2/3','4','5',('6a','6b'))
 
-baselineWindow = slice(690,750)
-responseWindow = slice(40,100)
+baseWin = slice(690,750)
+respWin = slice(40,100)
+
+
+def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
+    base = basePsth[:,:,baseWin].mean(axis=1)
+    resp = respPsth[:,:,respWin].mean(axis=1)
+    peak = np.max(resp-base.mean(axis=1)[:,None],axis=1)
+    hasResp = peak > 5 * base.std()
+    
+    base = basePsth[:,:,baseWin].mean(axis=2)
+    resp = respPsth[:,:,respWin].mean(axis=2)
+    pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
+    
+    return hasResp & (pval<0.05)
+    
 
 unitCount = np.zeros((len(sessionIds),len(regions)),dtype=int)
 for i,sid in enumerate(sessionIds):
@@ -100,30 +105,36 @@ for i,sid in enumerate(sessionIds):
     for j,reg in enumerate(regions):
         unitCount[i,j] = np.sum(units['structure_acronym']==reg)
 
-preChangePsth = []
-changePsth = []    
-adaptPsth = []
-for sid in sessionIds:
+changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
+preChangeSpikes = copy.deepcopy(changeSpikes)    
+adaptSpikes = copy.deepcopy(changeSpikes)
+for si,sid in enumerate(sessionIds):
+    print(str(si+1)+' of '+str(len(sessionIds)))
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     spikes = unitData[str(sid)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sid) & stimTable['active']]
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
-    isChange = stim['is_change'] & ~autoRewarded
-    changeFlash = np.where(isChange)[0]
-    preChangeFlash = changeFlash - 1
-    hasOmitted = np.array([any(stim[(stim['behavior_trial_id']==trial)]['omitted']) for trial in stim[isChange]['behavior_trial_id']])
+    changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
+    notOmitted = [flash for flash in changeFlash if not any(stim[flash-1:flash+10]['omitted']) and flash+10<spikes.shape[1]]
     
     for region in regions:
         inRegion = np.array(units['structure_acronym']==region)
+        if not any(inRegion):
+            continue
         for layer in layers:
             inLayer = np.array(units['cortical_layer']==layer) & inRegion if 'VIS' in region and layer!='all' else inRegion
+            if not any(inLayer):
+                continue
             s = spikes[inLayer,:,:]
-            for flash in changeFlash:
-                preChangePsth = s[:,flash-1,:]
-                changePsth = s[:,flash,:]
-                if not any(stim[flash-1:flash+10]['ommitted'] and flash+10<s.shape[1]:
-                    adapthPsth = s[:,flash-1:flash+10,:].reshape((s.shape[0],-1)).transpose((1,0,2))
+            changeSp = s[:,changeFlash,:]
+            preChangeSp = s[:,changeFlash-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+            changeSpikes[region][layer].append(changeSp[hasResp])
+            preChangeSpikes[region][layer].append(preChangeSp[hasResp])
+            adaptSpikes[region][layer].append(np.zeros((hasResp.sum(),len(notOmitted),11*750)))
+            for i,flash in enumerate(notOmitted):
+                adaptSpikes[region][layer][-1][:,i,:] = s[hasResp,flash-1:flash+10,:].reshape((hasResp.sum(),-1))
 
             
     
