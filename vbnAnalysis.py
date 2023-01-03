@@ -8,11 +8,17 @@ Created on Fri Dec  9 16:22:30 2022
 import copy
 import os
 import numpy as np
-import scipy
+import scipy.stats
 import pandas as pd
 import h5py
-from allensdk.brain_observatory.behavior.behavior_project_cache.behavior_neuropixels_project_cache import VisualBehaviorNeuropixelsProjectCache
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.rcParams['pdf.fonttype'] = 42
 
+
+
+## make h5df with binned spike counts
+from allensdk.brain_observatory.behavior.behavior_project_cache.behavior_neuropixels_project_cache import VisualBehaviorNeuropixelsProjectCache
 
 def getSpikeBins(spikeTimes,startTimes,windowDur,binSize=0.001):
     bins = np.arange(0,windowDur+binSize,binSize)
@@ -65,9 +71,7 @@ h5File.close()
     
 
 
-
-
-#
+##
 baseDir = r"C:\Users\svc_ccg\Desktop\Analysis\vbn"
 
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
@@ -80,8 +84,9 @@ unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r'
 sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
 
 regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
-layers = ('all','1','2/3','4','5',('6a','6b'))
+layers = ('1','2/3','4','5','6a','6b')
 
+binSize = 0.001
 baseWin = slice(690,750)
 respWin = slice(40,100)
 
@@ -97,19 +102,21 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
     
     return hasResp & (pval<0.05)
-    
 
+    
+#
 unitCount = np.zeros((len(sessionIds),len(regions)),dtype=int)
 for i,sid in enumerate(sessionIds):
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     for j,reg in enumerate(regions):
         unitCount[i,j] = np.sum(units['structure_acronym']==reg)
 
+
+#
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
 preChangeSpikes = copy.deepcopy(changeSpikes)    
 adaptSpikes = copy.deepcopy(changeSpikes)
 for si,sid in enumerate(sessionIds):
-    print(str(si+1)+' of '+str(len(sessionIds)))
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     spikes = unitData[str(sid)]['spikes']
     
@@ -123,22 +130,47 @@ for si,sid in enumerate(sessionIds):
         if not any(inRegion):
             continue
         for layer in layers:
-            inLayer = np.array(units['cortical_layer']==layer) & inRegion if 'VIS' in region and layer!='all' else inRegion
+            print('session '+str(si+1)+', '+region+', '+layer)
+            inLayer = inRegion & np.array(units['cortical_layer']==layer) if 'VIS' in region else inRegion
             if not any(inLayer):
                 continue
-            s = spikes[inLayer,:,:]
+            s = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(inLayer)[0]):
+                s[i]=spikes[u,:,:]
             changeSp = s[:,changeFlash,:]
             preChangeSp = s[:,changeFlash-1,:]
             hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
-            changeSpikes[region][layer].append(changeSp[hasResp])
-            preChangeSpikes[region][layer].append(preChangeSp[hasResp])
-            adaptSpikes[region][layer].append(np.zeros((hasResp.sum(),len(notOmitted),11*750)))
+            if not any(hasResp):
+                continue
+            changeSpikes[region][layer].append(changeSp[hasResp].mean(axis=1))
+            preChangeSpikes[region][layer].append(preChangeSp[hasResp].mean(axis=1))
+            adaptSp = np.zeros((hasResp.sum(),len(notOmitted),11*750),dtype=bool)
             for i,flash in enumerate(notOmitted):
-                adaptSpikes[region][layer][-1][:,i,:] = s[hasResp,flash-1:flash+10,:].reshape((hasResp.sum(),-1))
+                adaptSp[:,i,:] = s[hasResp,flash-1:flash+10,:].reshape((hasResp.sum(),-1))
+            adaptSpikes[region][layer].append(adaptSp.mean(axis=1))
+            if not 'VIS' in region:
+                break
 
-            
-    
+t = np.arange(11*750)/1000 - 750
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for region,clr in zip(regions,plt.cm.magma(np.linspace(0,1,len(regions)))):
+    if 'VIS' in region:
+        d = np.concatenate([np.concatenate(adaptSpikes[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
+    else:
+        d = np.concatenate(adaptSpikes[region]['1'])
+    d -= d[:,500:750].mean(axis=1)[:,None]
+    d /= binSize
+    ax.plot(t,d.mean(axis=0),color=clr,label=region)            
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([-0.25,7.5])
+ax.set_xlabel('Time (s)')
+ax.set_ylabel('Spikes/s')
+ax.legend()
+plt.tight_layout()
 
 
 
