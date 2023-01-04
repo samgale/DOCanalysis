@@ -84,24 +84,26 @@ unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r'
 sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
 
 regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
-layers = ('1','2/3','4','5','6a','6b')
+layers = (('1','2/3'),'4','5',('6a','6b'))
 
 binSize = 0.001
-baseWin = slice(690,750)
-respWin = slice(40,100)
+baseWin = slice(680,750)
+respWin = slice(30,100)
 
 
 def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
+    hasSpikes = ((respPsth[:,:,respWin].mean(axis=(1,2)) - basePsth[:,:,baseWin].mean(axis=(1,2))) / 0.001) > 0.1
+    
     base = basePsth[:,:,baseWin].mean(axis=1)
     resp = respPsth[:,:,respWin].mean(axis=1)
     peak = np.max(resp-base.mean(axis=1)[:,None],axis=1)
-    hasResp = peak > 5 * base.std()
+    hasPeakResp = peak > 5 * base.std()
     
     base = basePsth[:,:,baseWin].mean(axis=2)
     resp = respPsth[:,:,respWin].mean(axis=2)
     pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
     
-    return hasResp & (pval<0.05)
+    return hasSpikes & hasPeakResp & (pval<0.05)
 
     
 #
@@ -116,6 +118,9 @@ for i,sid in enumerate(sessionIds):
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
 preChangeSpikes = copy.deepcopy(changeSpikes)    
 adaptSpikes = copy.deepcopy(changeSpikes)
+changeResp = copy.deepcopy(changeSpikes)
+preChangeResp = copy.deepcopy(changeSpikes)
+adaptResp = copy.deepcopy(changeSpikes)
 for si,sid in enumerate(sessionIds):
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     spikes = unitData[str(sid)]['spikes']
@@ -130,8 +135,13 @@ for si,sid in enumerate(sessionIds):
         if not any(inRegion):
             continue
         for layer in layers:
-            print('session '+str(si+1)+', '+region+', '+layer)
-            inLayer = inRegion & np.array(units['cortical_layer']==layer) if 'VIS' in region else inRegion
+            print('session '+str(si+1)+', '+region+', '+str(layer))
+            if 'VIS' in region:
+                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
+            elif '1' not in layer:
+                break
+            else:
+                inLayer = inRegion
             if not any(inLayer):
                 continue
             s = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
@@ -144,35 +154,132 @@ for si,sid in enumerate(sessionIds):
                 continue
             changeSpikes[region][layer].append(changeSp[hasResp].mean(axis=1))
             preChangeSpikes[region][layer].append(preChangeSp[hasResp].mean(axis=1))
+            base = preChangeSpikes[region][layer][-1][:,baseWin].mean(axis=1)
+            changeResp[region][layer].append(changeSpikes[region][layer][-1][:,respWin].mean(axis=1)-base)
+            preChangeResp[region][layer].append(preChangeSpikes[region][layer][-1][:,respWin].mean(axis=1)-base)
             adaptSp = np.zeros((hasResp.sum(),len(notOmitted),11*750),dtype=bool)
             for i,flash in enumerate(notOmitted):
                 adaptSp[:,i,:] = s[hasResp,flash-1:flash+10,:].reshape((hasResp.sum(),-1))
             adaptSpikes[region][layer].append(adaptSp.mean(axis=1))
-            if not 'VIS' in region:
-                break
+            flashSpikes = adaptSpikes[region][layer][-1].reshape((hasResp.sum(),-1,750))
+            adaptResp[region][layer].append(flashSpikes[:,1:,respWin].mean(axis=2) - flashSpikes[:,:10,baseWin].mean(axis=2))
 
-t = np.arange(11*750)/1000 - 750
+t = np.arange(11*750)/1000 - 0.75
+flashTimes = np.arange(0,7.5,0.75)
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-for region,clr in zip(regions,plt.cm.magma(np.linspace(0,1,len(regions)))):
+for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
     if 'VIS' in region:
         d = np.concatenate([np.concatenate(adaptSpikes[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
     else:
-        d = np.concatenate(adaptSpikes[region]['1'])
-    d -= d[:,500:750].mean(axis=1)[:,None]
+        d = np.concatenate(adaptSpikes[region][layers[0]])
+    d -= d[:,baseWin].mean(axis=1)[:,None]
     d /= binSize
-    ax.plot(t,d.mean(axis=0),color=clr,label=region)            
+    ax.plot(t,d.mean(axis=0),color=clr,alpha=0.5,label=region+', n='+str(d.shape[0]))            
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlim([-0.25,7.5])
-ax.set_xlabel('Time (s)')
+ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Spikes/s')
-ax.legend()
+ax.legend(loc='upper center')
 plt.tight_layout()
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+    if 'VIS' in region:
+        d = np.concatenate([np.concatenate(adaptResp[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
+    else:
+        d = np.concatenate(adaptResp[region][layers[0]])
+    d /= d[:,0][:,None]
+    mean = d.mean(axis=0)
+    sem = d.std(axis=0)/(d.shape[0]**0.5)
+    ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=region)
+    for x,m,s in zip(flashTimes,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([-0.25,7.5])
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Time from change (s)')
+ax.set_ylabel('Norm. response')
+ax.legend(loc='lower right')
+plt.tight_layout()
 
+fig = plt.figure(figsize=(6,8))
+xticks = np.arange(len(regions))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(4,1,i+1)
+    mean = []
+    sem = []
+    for region in regions:
+        if 'VIS' in region:
+            d = np.concatenate(adaptResp[region][layer])
+        else:
+            d = np.concatenate(adaptResp[region][layers[0]])
+        d /= d[:,0][:,None]
+        mean.append(d[:,-1].mean(axis=0))
+        sem.append(d[:,-1].std(axis=0)/(d.shape[0]**0.5))
+    ax.plot(xticks,mean,color='k')
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color='k')
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(regions)
+    ax.set_ylim([0,1.01])
+    ax.set_ylabel('Adaptation ratio')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
+
+fig = plt.figure(figsize=(6,11))
+for i,region in enumerate(r for r in regions if 'VIS' in r):
+    ax = fig.add_subplot(6,1,i+1)
+    for layer,clr in zip(layers,plt.cm.magma(np.linspace(0,0.8,len(layers)))):
+        if len(adaptSpikes[region][layer])>0:
+            d = np.concatenate(adaptSpikes[region][layer])
+            d -= d[:,baseWin].mean(axis=1)[:,None]
+            d /= binSize
+            ax.plot(t,d.mean(axis=0),color=clr,alpha=0.5,label=str(layer)+', n='+str(d.shape[0]))            
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([-0.25,7.5])
+    if i==5:
+        ax.set_xlabel('Time from change (s)')
+    ax.set_ylabel('Spikes/s')
+    ax.legend(loc='upper center')
+    ax.set_title(region)
+plt.tight_layout()
+
+fig = plt.figure(figsize=(6,11))
+for i,region in enumerate(r for r in regions if 'VIS' in r):
+    ax = fig.add_subplot(6,1,i+1)
+    for layer,clr in zip(layers,plt.cm.magma(np.linspace(0,0.8,len(layers)))):
+        if len(adaptSpikes[region][layer])>0:
+            d = np.concatenate(adaptResp[region][layer])
+            d /= d[:,0][:,None]
+            mean = d.mean(axis=0)
+            sem = d.std(axis=0)/(d.shape[0]**0.5)
+            ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=layer)
+            for x,m,s in zip(flashTimes,mean,sem):
+                ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)            
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([-0.25,7.5])
+    ax.set_ylim([0,1.01])
+    if i==5:
+        ax.set_xlabel('Time from change (s)')
+    if i==0:
+        ax.set_ylabel('Norm. response')
+        ax.legend(loc='upper center')
+    ax.set_title(region)
+plt.tight_layout()
 
 
 
