@@ -116,16 +116,20 @@ for i,sid in enumerate(sessionIds):
 
 #
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
-preChangeSpikes = copy.deepcopy(changeSpikes)    
-adaptSpikes = copy.deepcopy(changeSpikes)
+preChangeSpikes = copy.deepcopy(changeSpikes)  
 changeResp = copy.deepcopy(changeSpikes)
-preChangeResp = copy.deepcopy(changeSpikes)
+preChangeResp = copy.deepcopy(changeSpikes)  
+adaptSpikes = copy.deepcopy(changeSpikes)
 adaptResp = copy.deepcopy(changeSpikes)
+flashBase = copy.deepcopy(changeSpikes)
+flashResp = copy.deepcopy(changeSpikes)
+changeFlashBase = copy.deepcopy(changeSpikes)
+changeFlashResp = copy.deepcopy(changeSpikes)
 for si,sid in enumerate(sessionIds):
     units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
     spikes = unitData[str(sid)]['spikes']
     
-    stim = stimTable[(stimTable['session_id']==sid) & stimTable['active']]
+    stim = stimTable[(stimTable['session_id']==sid) & stimTable['active']].reset_index()
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
     changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
     notOmitted = [flash for flash in changeFlash if not any(stim[flash-1:flash+10]['omitted']) and flash+10<spikes.shape[1]]
@@ -147,25 +151,60 @@ for si,sid in enumerate(sessionIds):
             s = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
             for i,u in enumerate(np.where(inLayer)[0]):
                 s[i]=spikes[u,:,:]
+                
             changeSp = s[:,changeFlash,:]
             preChangeSp = s[:,changeFlash-1,:]
             hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
             if not any(hasResp):
                 continue
+            base = s[hasResp,:,baseWin].sum(axis=2)
+            resp = np.full((hasResp.sum(),len(stim)),np.nan)
+            resp[:,1:] = s[hasResp,1:,respWin].sum(axis=2) - base[:,:-1]
+            
             changeSpikes[region][layer].append(changeSp[hasResp].mean(axis=1))
             preChangeSpikes[region][layer].append(preChangeSp[hasResp].mean(axis=1))
-            base = preChangeSpikes[region][layer][-1][:,baseWin].mean(axis=1)
-            changeResp[region][layer].append(changeSpikes[region][layer][-1][:,respWin].mean(axis=1)-base)
-            preChangeResp[region][layer].append(preChangeSpikes[region][layer][-1][:,respWin].mean(axis=1)-base)
+            changeResp[region][layer].append(resp[:,changeFlash])
+            preChangeResp[region][layer].append(resp[:,changeFlash-1])
+            
             adaptSp = np.zeros((hasResp.sum(),len(notOmitted),11*750),dtype=bool)
+            adaptR = np.zeros((hasResp.sum(),len(notOmitted),11))
             for i,flash in enumerate(notOmitted):
                 adaptSp[:,i,:] = s[hasResp,flash-1:flash+10,:].reshape((hasResp.sum(),-1))
+                adaptR[:,i,:] = resp[:,flash-1:flash+10]
             adaptSpikes[region][layer].append(adaptSp.mean(axis=1))
-            flashSpikes = adaptSpikes[region][layer][-1].reshape((hasResp.sum(),-1,750))
-            adaptResp[region][layer].append(flashSpikes[:,1:,respWin].mean(axis=2) - flashSpikes[:,:10,baseWin].mean(axis=2))
+            adaptResp[region][layer].append(adaptR.mean(axis=1))
+            
+            flashCount = np.zeros(12)
+            fb = np.zeros((hasResp.sum(),12))
+            fr = fb.copy()
+            changeCount = flashCount.copy()
+            cb = fb.copy()
+            cr = fb.copy()
+            for i,row in stim.iterrows():
+                lastLick = row['flashes_since_last_lick']
+                if not np.isnan(lastLick) and lastLick<13:
+                    ind = int(lastLick)-1
+                    if not row['previous_omitted'] and lastLick < row['flashes_since_change']:
+                        flashCount[ind] += 1
+                        fb[:,ind] += base[:,i-1]
+                        fr[:,ind] += resp[:,i]
+                    if row['is_change'] and not row['auto_rewarded']:
+                        changeCount[ind] += 1
+                        cb[:,ind] += base[:,i-1]
+                        cr[:,ind] += resp[:,i]
+            fb /= flashCount
+            fr /= flashCount
+            cb /= changeCount
+            cr /= changeCount
+            flashBase[region][layer].append(fb)
+            flashResp[region][layer].append(fr)
+            changeFlashBase[region][layer].append(cb)
+            changeFlashResp[region][layer].append(cr)
+            
+                             
 
 t = np.arange(11*750)/1000 - 0.75
-flashTimes = np.arange(0,7.5,0.75)
+flashTimes = np.arange(-0.75,7.5,0.75)
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -193,7 +232,7 @@ for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
         d = np.concatenate([np.concatenate(adaptResp[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
     else:
         d = np.concatenate(adaptResp[region][layers[0]])
-    d /= d[:,0][:,None]
+    d /= d[:,1][:,None]
     mean = d.mean(axis=0)
     sem = d.std(axis=0)/(d.shape[0]**0.5)
     ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=region)
@@ -202,7 +241,7 @@ for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlim([-0.25,7.5])
+ax.set_xlim([-1,7.5])
 ax.set_ylim([0,1.01])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Norm. response')
@@ -220,7 +259,7 @@ for i,layer in enumerate(layers):
             d = np.concatenate(adaptResp[region][layer])
         else:
             d = np.concatenate(adaptResp[region][layers[0]])
-        d /= d[:,0][:,None]
+        d /= d[:,1][:,None]
         mean.append(d[:,-1].mean(axis=0))
         sem.append(d[:,-1].std(axis=0)/(d.shape[0]**0.5))
     ax.plot(xticks,mean,color='k')
@@ -262,7 +301,7 @@ for i,region in enumerate(r for r in regions if 'VIS' in r):
     for layer,clr in zip(layers,plt.cm.magma(np.linspace(0,0.8,len(layers)))):
         if len(adaptSpikes[region][layer])>0:
             d = np.concatenate(adaptResp[region][layer])
-            d /= d[:,0][:,None]
+            d /= d[:,1][:,None]
             mean = d.mean(axis=0)
             sem = d.std(axis=0)/(d.shape[0]**0.5)
             ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=layer)
@@ -271,7 +310,7 @@ for i,region in enumerate(r for r in regions if 'VIS' in r):
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xlim([-0.25,7.5])
+    ax.set_xlim([-1,7.5])
     ax.set_ylim([0,1.01])
     if i==5:
         ax.set_xlabel('Time from change (s)')
@@ -283,8 +322,37 @@ plt.tight_layout()
 
 
 
-
-
+flashSinceLickTimes = np.arange(0.75,0.75*13,0.75)
+for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash resp','pre-flash baseline','change resp','pre-change baseline')):
+    fig = plt.figure(figsize=(6,8))
+    for i,layer in enumerate(layers):
+        ax = fig.add_subplot(4,1,i+1)
+        ymax = 0
+        for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+            if 'VIS' in region:
+                d = np.concatenate(r[region][layer])
+            else:
+                d = np.concatenate(r[region][layers[0]])
+            d /= (respWin.stop-respWin.start)/1000
+            mean = np.nanmean(d,axis=0)
+            sem = np.nanstd(d,axis=0)/(d.shape[0]**0.5)
+            lbl = region if i==0 else None
+            ax.plot(flashSinceLickTimes,mean,color=clr,alpha=0.5,label=lbl)
+            for x,m,s in zip(flashSinceLickTimes,mean,sem):
+                ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)
+            ymax = max(ymax,np.nanmax(mean+sem))
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlim([0,9.75])
+        ax.set_ylim([0,ymax])
+        ax.set_xlabel('time since lick (s)')
+        ax.set_ylabel(ylbl+'\n(spikes/s)')
+        if i==0:
+            loc = 'upper left' if 'change' in ylbl else 'upper right'
+            ax.legend(loc=loc)
+        ax.set_title('cortical layer '+str(layer))
+    plt.tight_layout()
 
 
 
