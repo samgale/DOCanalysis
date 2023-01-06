@@ -6,6 +6,7 @@ Created on Fri Dec  9 16:22:30 2022
 """
 
 import copy
+import math
 import os
 import numpy as np
 import scipy.stats
@@ -97,7 +98,7 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     base = basePsth[:,:,baseWin].mean(axis=1)
     resp = respPsth[:,:,respWin].mean(axis=1)
     peak = np.max(resp-base.mean(axis=1)[:,None],axis=1)
-    hasPeakResp = peak > 5 * base.std()
+    hasPeakResp = peak > 5 * base.std(axis=1)
     
     base = basePsth[:,:,baseWin].mean(axis=2)
     resp = respPsth[:,:,respWin].mean(axis=2)
@@ -125,11 +126,11 @@ flashBase = copy.deepcopy(changeSpikes)
 flashResp = copy.deepcopy(changeSpikes)
 changeFlashBase = copy.deepcopy(changeSpikes)
 changeFlashResp = copy.deepcopy(changeSpikes)
-for si,sid in enumerate(sessionIds):
-    units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
-    spikes = unitData[str(sid)]['spikes']
+for sessionIndex,sessionId in enumerate(sessionIds):
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
     
-    stim = stimTable[(stimTable['session_id']==sid) & stimTable['active']].reset_index()
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
     changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
     notOmitted = [flash for flash in changeFlash if not any(stim[flash-1:flash+10]['omitted']) and flash+10<spikes.shape[1]]
@@ -139,7 +140,7 @@ for si,sid in enumerate(sessionIds):
         if not any(inRegion):
             continue
         for layer in layers:
-            print('session '+str(si+1)+', '+region+', '+str(layer))
+            print('session '+str(sessionIndex+1)+', '+region+', '+str(layer))
             if 'VIS' in region:
                 inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
             elif '1' not in layer:
@@ -201,7 +202,6 @@ for si,sid in enumerate(sessionIds):
             changeFlashBase[region][layer].append(cb)
             changeFlashResp[region][layer].append(cr)
             
-                             
 
 t = np.arange(11*750)/1000 - 0.75
 flashTimes = np.arange(-0.75,7.5,0.75)
@@ -233,8 +233,9 @@ for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
     else:
         d = np.concatenate(adaptResp[region][layers[0]])
     d /= d[:,1][:,None]
-    mean = d.mean(axis=0)
-    sem = d.std(axis=0)/(d.shape[0]**0.5)
+    d[np.isinf(d)] = np.nan
+    mean = np.nanmean(d,axis=0)
+    sem = np.nanstd(d,axis=0)/(d.shape[0]**0.5)
     ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=region)
     for x,m,s in zip(flashTimes,mean,sem):
         ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)
@@ -246,33 +247,6 @@ ax.set_ylim([0,1.01])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Norm. response')
 ax.legend(loc='lower right')
-plt.tight_layout()
-
-fig = plt.figure(figsize=(6,8))
-xticks = np.arange(len(regions))
-for i,layer in enumerate(layers):
-    ax = fig.add_subplot(4,1,i+1)
-    mean = []
-    sem = []
-    for region in regions:
-        if 'VIS' in region:
-            d = np.concatenate(adaptResp[region][layer])
-        else:
-            d = np.concatenate(adaptResp[region][layers[0]])
-        d /= d[:,1][:,None]
-        mean.append(d[:,-1].mean(axis=0))
-        sem.append(d[:,-1].std(axis=0)/(d.shape[0]**0.5))
-    ax.plot(xticks,mean,color='k')
-    for x,m,s in zip(xticks,mean,sem):
-        ax.plot([x,x],[m-s,m+s],color='k')
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(regions)
-    ax.set_ylim([0,1.01])
-    ax.set_ylabel('Adaptation ratio')
-    ax.set_title('cortical layer '+str(layer))
 plt.tight_layout()
 
 fig = plt.figure(figsize=(6,11))
@@ -302,8 +276,9 @@ for i,region in enumerate(r for r in regions if 'VIS' in r):
         if len(adaptSpikes[region][layer])>0:
             d = np.concatenate(adaptResp[region][layer])
             d /= d[:,1][:,None]
-            mean = d.mean(axis=0)
-            sem = d.std(axis=0)/(d.shape[0]**0.5)
+            d[np.isinf(d)] = np.nan
+            mean = np.nanmean(d,axis=0)
+            sem = np.nanstd(d,axis=0)/(d.shape[0]**0.5)
             ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=layer)
             for x,m,s in zip(flashTimes,mean,sem):
                 ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)            
@@ -320,6 +295,33 @@ for i,region in enumerate(r for r in regions if 'VIS' in r):
     ax.set_title(region)
 plt.tight_layout()
 
+fig = plt.figure(figsize=(6,8))
+xticks = np.arange(len(regions))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(4,1,i+1)
+    mean = []
+    sem = []
+    for region in regions:
+        if 'VIS' in region:
+            d = np.concatenate(adaptResp[region][layer])
+        else:
+            d = np.concatenate(adaptResp[region][layers[0]])
+        d /= d[:,1][:,None]
+        d[np.isinf(d)] = np.nan
+        mean.append(np.nanmean(d[:,-1],axis=0))
+        sem.append(np.nanstd(d[:,-1],axis=0)/(d.shape[0]**0.5))
+    ax.plot(xticks,mean,color='k')
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color='k')
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(regions)
+    ax.set_ylim([0,1.01])
+    ax.set_ylabel('Adaptation ratio')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
 
 
 flashSinceLickTimes = np.arange(0.75,0.75*13,0.75)
@@ -354,6 +356,122 @@ for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash 
         ax.set_title('cortical layer '+str(layer))
     plt.tight_layout()
 
+
+#
+import sklearn
+from sklearn.svm import LinearSVC
+
+def crossValidate(model,X,y,nsplits=5):
+    nfeatures = X.shape[1]
+    nclasses = len(set(y))
+    nsamples = len(y)
+    samplesPerSplit = round(nsamples/nsplits) if nsplits<nsamples else 1
+    randInd = np.random.permutation(nsamples)
+    cv = {'estimator': [sklearn.base.clone(model) for _ in range(nsplits)]}
+    cv['train_score'] = []
+    cv['test_score'] = []
+    cv['predict'] = np.full(nsamples,np.nan)
+    cv['predict_proba'] = np.full((nsamples,nclasses),np.nan)
+    cv['decision_function'] = np.full((nsamples,nclasses),np.nan)
+    cv['feature_importance'] = np.full((nsplits,nclasses,nfeatures),np.nan)
+    cv['coef'] = np.full((nsplits,nclasses,nfeatures),np.nan)
+    modelMethods = dir(model)
+    for k,estimator in enumerate(cv['estimator']):
+        i = k*samplesPerSplit
+        testInd = randInd[i:i+samplesPerSplit] if k+1<nsplits else randInd[i:]
+        trainInd = np.setdiff1d(randInd,testInd)
+        estimator.fit(X[trainInd],y[trainInd])
+        cv['train_score'].append(estimator.score(X[trainInd],y[trainInd]))
+        cv['test_score'].append(estimator.score(X[testInd],y[testInd]))
+        cv['predict'][testInd] = estimator.predict(X[testInd])
+        for method in ('predict_proba','decision_function'):
+            if method in modelMethods:
+                m = getattr(estimator,method)(X[testInd])
+                if method=='decision_function' and nclasses<3:
+                    m = np.tile(m,(2,1)).T
+                cv[method][testInd] = m
+        assert(False)
+        for attr in ('feature_importance_','coef_'):
+            if attr in estimator.__dict__:
+                getattr(estimator,attr)
+    return cv
+
+
+model = LinearSVC(C=1.0,max_iter=1e4)
+
+unitSampleSize = [20]
+
+nCrossVal = 5
+
+decodeWindowSize = 10
+decodeWindows = np.arange(decodeWindowSize,respWin.stop+decodeWindowSize,decodeWindowSize)
+
+
+for sessionIndex,sessionId in enumerate(sessionIds):
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
+    changeTimes = stim['start_time'][changeFlash]
+    hit = stim['hit'][changeFlash]
+    engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in changeTimes])
+    nTrials = engaged.sum()
+    
+    for region in regions:
+        inRegion = np.array(units['structure_acronym']==region)
+        if not any(inRegion):
+            continue
+        for layer in layers:
+            print('session '+str(sessionIndex+1)+', '+region+', '+str(layer))
+            if 'VIS' in region:
+                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
+            elif '1' not in layer:
+                break
+            else:
+                inLayer = inRegion
+            if not any(inLayer):
+                continue
+            s = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(inLayer)[0]):
+                s[i]=spikes[u,:,:]
+                
+            changeSp = s[:,changeFlash[engaged],:]
+            preChangeSp = s[:,changeFlash[engaged]-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+            if not any(hasResp):
+                continue
+            
+            nUnits = hasResp.sum()
+            unitInd = np.where(hasResp)[0]
+            for sampleSize in unitSampleSize:
+                if nUnits < sampleSize:
+                    continue
+                if sampleSize>1:
+                    if sampleSize==nUnits:
+                        nSamples = 1
+                        unitSamples = [unitInd]
+                    else:
+                        # >99% chance each neuron is chosen at least once
+                        nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
+                        unitSamples = [np.random.choice(unitInd,sampleSize,replace=False) for _ in range(nSamples)]
+                else:
+                    nSamples = nUnits
+                    unitSamples = [[i] for i in unitInd]
+                for i,unitSamp in enumerate(unitSamples):
+                    for j,winEnd in enumerate(decodeWindows):
+                        winEnd=100
+                        X = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((s.shape[1],-1)) for s in (changeSp,preChangeSp)])
+                        y = np.zeros(X.shape[0])
+                        y[:nTrials] = 1                        
+                        cv = crossValidate(model,X,y,nsplits=nCrossVal)
+                        changeScore[name].append(np.mean(cv['test_score']))
+                        changeScoreTrain[name].append(np.mean(cv['train_score']))
+                        changePredict[name].append(cv['predict'][:changeTrials.sum()])
+                        changePredictProb[name].append(cv[probMethod][:changeTrials.sum(),1])
+                        changePredictProbShuffle[name].append(cvShuffle[probMethod][:changeTrials.sum(),1])
+                        changeFeatureImportance[name][i][unitSamp] = np.mean([np.reshape(np.absolute(getattr(estimator,featureMethod)),(sampleSize,-1)) for estimator in cv['estimator']],axis=0)
 
 
 
