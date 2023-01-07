@@ -8,6 +8,7 @@ Created on Fri Dec  9 16:22:30 2022
 import copy
 import math
 import os
+import warnings
 import numpy as np
 import scipy.stats
 import pandas as pd
@@ -362,7 +363,6 @@ import sklearn
 from sklearn.svm import LinearSVC
 
 def crossValidate(model,X,y,nsplits=5):
-    nfeatures = X.shape[1]
     nclasses = len(set(y))
     nsamples = len(y)
     samplesPerSplit = round(nsamples/nsplits) if nsplits<nsamples else 1
@@ -372,9 +372,9 @@ def crossValidate(model,X,y,nsplits=5):
     cv['test_score'] = []
     cv['predict'] = np.full(nsamples,np.nan)
     cv['predict_proba'] = np.full((nsamples,nclasses),np.nan)
-    cv['decision_function'] = np.full((nsamples,nclasses),np.nan)
-    cv['feature_importance'] = np.full((nsplits,nclasses,nfeatures),np.nan)
-    cv['coef'] = np.full((nsplits,nclasses,nfeatures),np.nan)
+    cv['decision_function'] = np.full((nsamples,nclasses),np.nan) if nclasses>2 else np.full(nsamples,np.nan)
+    cv['feature_importance'] = []
+    cv['coef'] = []
     modelMethods = dir(model)
     for k,estimator in enumerate(cv['estimator']):
         i = k*samplesPerSplit
@@ -386,27 +386,25 @@ def crossValidate(model,X,y,nsplits=5):
         cv['predict'][testInd] = estimator.predict(X[testInd])
         for method in ('predict_proba','decision_function'):
             if method in modelMethods:
-                m = getattr(estimator,method)(X[testInd])
-                if method=='decision_function' and nclasses<3:
-                    m = np.tile(m,(2,1)).T
-                cv[method][testInd] = m
-        assert(False)
+                cv[method][testInd] = getattr(estimator,method)(X[testInd])
         for attr in ('feature_importance_','coef_'):
             if attr in estimator.__dict__:
-                getattr(estimator,attr)
+                cv[attr[:-1]].append(getattr(estimator,attr))
     return cv
 
 
 model = LinearSVC(C=1.0,max_iter=1e4)
 
-unitSampleSize = [20]
+unitSampleSize = [5,10,20,40]
 
 nCrossVal = 5
 
 decodeWindowSize = 10
 decodeWindows = np.arange(decodeWindowSize,respWin.stop+decodeWindowSize,decodeWindowSize)
 
+decodeData = {session: {region: {layer: {} for layer in layers} for region in regions} for session in sessionIds}
 
+warnings.filterwarnings('ignore')
 for sessionIndex,sessionId in enumerate(sessionIds):
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
@@ -442,39 +440,46 @@ for sessionIndex,sessionId in enumerate(sessionIds):
             hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
             if not any(hasResp):
                 continue
+            changeSp = changeSp[hasResp]
+            preChangeSp = preChangeSp[hasResp]
             
             nUnits = hasResp.sum()
-            unitInd = np.where(hasResp)[0]
             for sampleSize in unitSampleSize:
                 if nUnits < sampleSize:
                     continue
                 if sampleSize>1:
                     if sampleSize==nUnits:
                         nSamples = 1
-                        unitSamples = [unitInd]
+                        unitSamples = [np.arange(nUnits)]
                     else:
                         # >99% chance each neuron is chosen at least once
                         nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
-                        unitSamples = [np.random.choice(unitInd,sampleSize,replace=False) for _ in range(nSamples)]
+                        unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
                 else:
                     nSamples = nUnits
-                    unitSamples = [[i] for i in unitInd]
+                    unitSamples = [[i] for i in range(nUnits)]
+                trainAccuracy = np.full((len(unitSamples),len(decodeWindows)),np.nan)
+                testAccuracy = trainAccuracy.copy()
+                prediction = np.full((len(unitSamples),len(decodeWindows),nTrials),np.nan)
+                confidence = prediction.copy()
+                featureWeights = np.full((len(unitSamples),len(decodeWindows),nUnits,decodeWindows[-1]),np.nan)
                 for i,unitSamp in enumerate(unitSamples):
                     for j,winEnd in enumerate(decodeWindows):
-                        winEnd=100
                         X = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((s.shape[1],-1)) for s in (changeSp,preChangeSp)])
                         y = np.zeros(X.shape[0])
                         y[:nTrials] = 1                        
                         cv = crossValidate(model,X,y,nsplits=nCrossVal)
-                        changeScore[name].append(np.mean(cv['test_score']))
-                        changeScoreTrain[name].append(np.mean(cv['train_score']))
-                        changePredict[name].append(cv['predict'][:changeTrials.sum()])
-                        changePredictProb[name].append(cv[probMethod][:changeTrials.sum(),1])
-                        changePredictProbShuffle[name].append(cvShuffle[probMethod][:changeTrials.sum(),1])
-                        changeFeatureImportance[name][i][unitSamp] = np.mean([np.reshape(np.absolute(getattr(estimator,featureMethod)),(sampleSize,-1)) for estimator in cv['estimator']],axis=0)
-
-
-
+                        trainAccuracy[i,j] = np.mean(cv['train_score'])
+                        testAccuracy[i,j] = np.mean(cv['test_score'])
+                        prediction[i,j] = cv['predict'][:nTrials]
+                        confidence[i,j] = cv['decision_function'][:nTrials]
+                        featureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
+            decodeData[sessionId][region][layer]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
+            decodeData[sessionId][region][layer]['testAccuracy'] = np.median(testAccuracy,axis=0) 
+            decodeData[sessionId][region][layer]['prediction'] = scipy.stats.mode(prediction,axis=0)[0].flatten()   
+            decodeData[sessionId][region][layer]['confidence'] = np.median(confidence,axis=0)
+            decodeData[sessionId][region][layer]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
+warnings.filterwarnings('default')
 
 
 
