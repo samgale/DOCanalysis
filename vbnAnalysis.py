@@ -402,7 +402,7 @@ nCrossVal = 5
 decodeWindowSize = 10
 decodeWindows = np.arange(decodeWindowSize,respWin.stop+decodeWindowSize,decodeWindowSize)
 
-decodeData = {session: {region: {layer: {} for layer in layers} for region in regions} for session in sessionIds}
+decodeData = {session: {region: {layer: {sampleSize: {} for sampleSize in unitSampleSize} for layer in layers} for region in regions} for session in sessionIds}
 
 warnings.filterwarnings('ignore')
 for sessionIndex,sessionId in enumerate(sessionIds):
@@ -474,11 +474,11 @@ for sessionIndex,sessionId in enumerate(sessionIds):
                         prediction[i,j] = cv['predict'][:nTrials]
                         confidence[i,j] = cv['decision_function'][:nTrials]
                         featureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
-            decodeData[sessionId][region][layer]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
-            decodeData[sessionId][region][layer]['testAccuracy'] = np.median(testAccuracy,axis=0) 
-            decodeData[sessionId][region][layer]['prediction'] = scipy.stats.mode(prediction,axis=0)[0].flatten()   
-            decodeData[sessionId][region][layer]['confidence'] = np.median(confidence,axis=0)
-            decodeData[sessionId][region][layer]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
+            decodeData[sessionId][region][layer][sampleSize]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
+            decodeData[sessionId][region][layer][sampleSize]['testAccuracy'] = np.median(testAccuracy,axis=0) 
+            decodeData[sessionId][region][layer][sampleSize]['prediction'] = scipy.stats.mode(prediction,axis=0)[0].flatten()   
+            decodeData[sessionId][region][layer][sampleSize]['confidence'] = np.median(confidence,axis=0)
+            decodeData[sessionId][region][layer][sampleSize]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
 warnings.filterwarnings('default')
 
 
