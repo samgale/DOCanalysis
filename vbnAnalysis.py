@@ -8,6 +8,7 @@ Created on Fri Dec  9 16:22:30 2022
 import copy
 import math
 import os
+import pickle
 import warnings
 import numpy as np
 import scipy.stats
@@ -16,7 +17,7 @@ import h5py
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
-
+import fileIO
 
 
 ## make h5df with binned spike counts
@@ -412,10 +413,21 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
     changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
-    changeTimes = stim['start_time'][changeFlash]
-    hit = stim['hit'][changeFlash]
-    engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in changeTimes])
-    nTrials = engaged.sum()
+    isCatch = stim['catch']
+    isCatch[isCatch.isnull()] = False
+    isCatch = np.array(isCatch).astype(bool)
+    catchFlash = np.searchsorted(stim['start_time'],np.unique(stim['change_time_no_display_delay'][isCatch]))
+    changeTimes = np.array(stim['start_time'][changeFlash])
+    catchTimes = np.array(stim['start_time'][catchFlash])
+    hit = np.array(stim['hit'][changeFlash])
+    falseAlarm = np.array(stim['false_alarm'][catchFlash])
+    
+    engagedChange,engagedCatch = [np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in times]) for times in (changeTimes,catchTimes)]
+    nChangeTrials = engagedChange.sum()
+    nCatchTrials = engagedCatch.sum()
+    
+    decodeData[sessionId]['changeResp'] = hit[engagedChange]
+    decodeData[sessionId]['catchResp'] = falseAlarm[engagedCatch]
     
     for region in regions:
         inRegion = np.array(units['structure_acronym']==region)
@@ -431,19 +443,19 @@ for sessionIndex,sessionId in enumerate(sessionIds):
                 inLayer = inRegion
             if not any(inLayer):
                 continue
-            s = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            sp = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
             for i,u in enumerate(np.where(inLayer)[0]):
-                s[i]=spikes[u,:,:]
+                sp[i]=spikes[u,:,:]
                 
-            changeSp = s[:,changeFlash[engaged],:]
-            preChangeSp = s[:,changeFlash[engaged]-1,:]
+            changeSp = sp[:,changeFlash[engagedChange],:]
+            preChangeSp = sp[:,changeFlash[engagedChange]-1,:]
             hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
             if not any(hasResp):
                 continue
-            changeSp = changeSp[hasResp]
-            preChangeSp = preChangeSp[hasResp]
-            
             nUnits = hasResp.sum()
+            changeSp,preChangeSp = [s[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nChangeTrials,len(decodeWindows),decodeWindowSize)).sum(axis=-1) for s in (changeSp,preChangeSp)]
+            catchSp = sp[hasResp][:,catchFlash[engagedCatch],:decodeWindows[-1]].reshape((nUnits,nCatchTrials,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
+            
             for sampleSize in unitSampleSize:
                 if nUnits < sampleSize:
                     continue
@@ -459,30 +471,91 @@ for sessionIndex,sessionId in enumerate(sessionIds):
                     nSamples = nUnits
                     unitSamples = [[i] for i in range(nUnits)]
                 trainAccuracy = np.full((len(unitSamples),len(decodeWindows)),np.nan)
-                testAccuracy = trainAccuracy.copy()
-                prediction = np.full((len(unitSamples),len(decodeWindows),nTrials),np.nan)
-                confidence = prediction.copy()
                 featureWeights = np.full((len(unitSamples),len(decodeWindows),nUnits,decodeWindows[-1]),np.nan)
+                changeAccuracy = trainAccuracy.copy()
+                changePrediction = np.full((len(unitSamples),len(decodeWindows),nChangeTrials),np.nan)
+                changeConfidence = changePrediction.copy()
+                catchAccuracy = trainAccuracy.copy()
+                catchPrediction = np.full((len(unitSamples),len(decodeWindows),nCatchTrials),np.nan)
+                catchConfidence = catchPrediction.copy()
                 for i,unitSamp in enumerate(unitSamples):
-                    for j,winEnd in enumerate(decodeWindows):
-                        X = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((s.shape[1],-1)) for s in (changeSp,preChangeSp)])
+                    for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
+                        X = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nChangeTrials,-1)) for s in (changeSp,preChangeSp)])
                         y = np.zeros(X.shape[0])
-                        y[:nTrials] = 1                        
+                        y[:nChangeTrials] = 1                        
                         cv = crossValidate(model,X,y,nsplits=nCrossVal)
                         trainAccuracy[i,j] = np.mean(cv['train_score'])
-                        testAccuracy[i,j] = np.mean(cv['test_score'])
-                        prediction[i,j] = cv['predict'][:nTrials]
-                        confidence[i,j] = cv['decision_function'][:nTrials]
                         featureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
-            decodeData[sessionId][region][layer][sampleSize]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
-            decodeData[sessionId][region][layer][sampleSize]['testAccuracy'] = np.median(testAccuracy,axis=0) 
-            decodeData[sessionId][region][layer][sampleSize]['prediction'] = scipy.stats.mode(prediction,axis=0)[0].flatten()   
-            decodeData[sessionId][region][layer][sampleSize]['confidence'] = np.median(confidence,axis=0)
-            decodeData[sessionId][region][layer][sampleSize]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
+                        changeAccuracy[i,j] = np.mean(cv['test_score'])
+                        changePrediction[i,j] = cv['predict'][:nChangeTrials]
+                        changeConfidence[i,j] = cv['decision_function'][:nChangeTrials]
+                        Xcatch = catchSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nCatchTrials,-1))
+                        catchAccuracy[i,j] = np.mean([estimator.score(Xcatch,np.zeros(nCatchTrials)) for estimator in cv['estimator']])
+                        catchPrediction[i,j] = scipy.stats.mode([estimator.predict(Xcatch) for estimator in cv['estimator']],axis=0)[0].flatten()
+                        catchConfidence[i,j] = np.mean([estimator.decision_function(Xcatch) for estimator in cv['estimator']],axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['changeAccuracy'] = np.median(changeAccuracy,axis=0) 
+                decodeData[sessionId][region][layer][sampleSize]['changePrediction'] = scipy.stats.mode(changePrediction,axis=0)[0].flatten()   
+                decodeData[sessionId][region][layer][sampleSize]['changeConfidence'] = np.median(changeConfidence,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['catchAccuracy'] = np.median(catchAccuracy,axis=0) 
+                decodeData[sessionId][region][layer][sampleSize]['catcgPrediction'] = scipy.stats.mode(catchPrediction,axis=0)[0].flatten()   
+                decodeData[sessionId][region][layer][sampleSize]['catchConfidence'] = np.median(catchConfidence,axis=0)              
 warnings.filterwarnings('default')
 
+# save result to pkl file
+pkl = fileIO.saveFile(fileType='*.pkl')
+pickle.dump(decodeData,open(pkl,'wb'))
+
+# get result from pkl file
+pkl = fileIO.getFile(fileType='*.pkl')
+decodeData = pickle.load(open(pkl,'rb'))
 
 
+xticks = np.arange(len(regions))
+for layer in layers:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for x,region in enumerate(regions):
+        for sampleSize in unitSampleSize:
+            lyr = layer if 'VIS' in region else layers[0]
+            d = [decodeData[sessionId][region][lyr][sampleSize]['testAccuracy'][-1] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
+            m = np.mean(d)
+            s = np.std(d)/(len(d)**0.5)
+            ax.plot(x,m,'ko')
+            ax.plot([x,x],[m-s,m+s],'k')
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(regions)
+    plt.tight_layout()
+
+for layer in layers:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for x,region in enumerate(regions):
+        for sampleSize in unitSampleSize:
+            lyr = layer if 'VIS' in region else layers[0]
+            r = []
+            for sessionId in sessionIds:
+                if len(decodeData[sessionId][region][lyr][sampleSize])>0:
+                    b = decodeData[sessionId]['behavior']
+                    d = decodeData[sessionId][region][lyr][sampleSize]['confidence'][-1]
+                    r.append(np.corrcoef(b,d)[0,1])
+                    if np.isnan(r[-1]):
+                        assert(False)
+            print(r)
+            m = np.mean(r)
+            s = np.std(r)/(len(r)**0.5)
+            ax.plot(x,m,'ko')
+            ax.plot([x,x],[m-s,m+s],'k')
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(regions)
+    plt.tight_layout()
 
 
 
