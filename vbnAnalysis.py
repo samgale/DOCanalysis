@@ -17,6 +17,7 @@ import h5py
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
+import sklearn
 import fileIO
 from DynamicRoutingAnalysisUtils import calcDprime
 
@@ -84,12 +85,6 @@ unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
-
-sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
-
-regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
-layers = (('1','2/3'),'4','5',('6a','6b'))
-
 binSize = 0.001
 baseWin = slice(680,750)
 respWin = slice(30,100)
@@ -110,15 +105,53 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     return hasSpikes & hasPeakResp & (pval<0.05)
 
     
-#
-unitCount = np.zeros((len(sessionIds),len(regions)),dtype=int)
-for i,sid in enumerate(sessionIds):
-    units = unitTable.set_index('unit_id').loc[unitData[str(sid)]['unitIds'][:]]
-    for j,reg in enumerate(regions):
-        unitCount[i,j] = np.sum(units['structure_acronym']==reg)
+## count responsive units
+sessionIds = stimTable['session_id'].unique()
+
+regions = np.unique(unitTable['structure_acronym'])
+
+nUnits = {region: [] for region in regions}
+
+for sessionIndex,sessionId in enumerate(sessionIds):
+    print('session '+str(sessionIndex+1))
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
+    
+    for region in regions:
+        print(region)
+        inRegion = np.array(units['structure_acronym']==region)
+        if any(inRegion):
+            s = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(inRegion)[0]):
+                s[i]=spikes[u,:,:]
+            changeSp = s[:,changeFlash,:]
+            preChangeSp = s[:,changeFlash-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+            nUnits[region].append(hasResp.sum())
+            
+for region in nUnits:
+    print(region)
+    print(sum([n>19 for n in nUnits[region]]))
+
+# save result to pkl file
+pkl = fileIO.saveFile(fileType='*.pkl')
+pickle.dump(nUnits,open(pkl,'wb'))
+
+# get result from pkl file
+pkl = fileIO.getFile(fileType='*.pkl')
+nUnits = pickle.load(open(pkl,'rb'))
 
 
-#
+## adaptation
+sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
+
+regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
+layers = (('1','2/3'),'4','5',('6a','6b'))
+
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
 preChangeSpikes = copy.deepcopy(changeSpikes)  
 changeResp = copy.deepcopy(changeSpikes)
@@ -360,28 +393,36 @@ for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash 
     plt.tight_layout()
 
 
-#
-import sklearn
-from sklearn.svm import LinearSVC
-
-def crossValidate(model,X,y,nsplits=5):
-    nclasses = len(set(y))
-    nsamples = len(y)
-    samplesPerSplit = round(nsamples/nsplits) if nsplits<nsamples else 1
-    randInd = np.random.permutation(nsamples)
-    cv = {'estimator': [sklearn.base.clone(model) for _ in range(nsplits)]}
+## decoding
+def crossValidate(model,X,y,nSplits):
+    # cross validation using stratified shuffle split
+    # each split preserves the percentage of samples of each class
+    # all samples used in one test set
+    
+    classVals = np.unique(y)
+    nClasses = len(classVals)
+    nSamples = len(y)
+    samplesPerClass = [np.sum(y==val) for val in classVals]
+    samplesPerSplit = [round(n/nSplits) for n in samplesPerClass]
+    shuffleInd = np.random.permutation(nSamples)
+    
+    cv = {'estimator': [sklearn.base.clone(model) for _ in range(nSplits)]}
     cv['train_score'] = []
     cv['test_score'] = []
-    cv['predict'] = np.full(nsamples,np.nan)
-    cv['predict_proba'] = np.full((nsamples,nclasses),np.nan)
-    cv['decision_function'] = np.full((nsamples,nclasses),np.nan) if nclasses>2 else np.full(nsamples,np.nan)
+    cv['predict'] = np.full(nSamples,np.nan)
+    cv['predict_proba'] = np.full((nSamples,nClasses),np.nan)
+    cv['decision_function'] = np.full((nSamples,nClasses),np.nan) if nClasses>2 else np.full(nSamples,np.nan)
     cv['feature_importance'] = []
     cv['coef'] = []
     modelMethods = dir(model)
+    
     for k,estimator in enumerate(cv['estimator']):
-        i = k*samplesPerSplit
-        testInd = randInd[i:i+samplesPerSplit] if k+1<nsplits else randInd[i:]
-        trainInd = np.setdiff1d(randInd,testInd)
+        testInd = []
+        for val,n in zip(classVals,samplesPerSplit):
+            start = k*n
+            ind = shuffleInd[y[shuffleInd]==val]
+            testInd.extend(ind[start:start+n] if k+1<nSplits else ind[start:])
+        trainInd = np.setdiff1d(shuffleInd,testInd)
         estimator.fit(X[trainInd],y[trainInd])
         cv['train_score'].append(estimator.score(X[trainInd],y[trainInd]))
         cv['test_score'].append(estimator.score(X[testInd],y[testInd]))
@@ -397,14 +438,17 @@ def crossValidate(model,X,y,nsplits=5):
 
 sessionIds = stimTable['session_id'].unique()
 
-model = LinearSVC(C=1.0,max_iter=1e4)
+regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
+layers = (('1','2/3'),'4','5',('6a','6b'))
+
+model = sklearn.svm.LinearSVC(C=1.0,max_iter=1e4)
 
 unitSampleSize = np.arange(5,45,5)
 
 nCrossVal = 5
 
 decodeWindowSize = 10
-decodeWindowEnd = 150 # respWin.stop
+decodeWindowEnd = 500 # respWin.stop
 decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
 decodeData = {sessionId: {region: {layer: {sampleSize: {} for sampleSize in unitSampleSize} for layer in layers} for region in regions} for sessionId in sessionIds}
@@ -434,8 +478,8 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     nChangeTrials = engagedChange.sum()
     nCatchTrials = engagedCatch.sum()
     
-    decodeData[sessionId]['changeResp'] = hit[engagedChange]
-    decodeData[sessionId]['catchResp'] = falseAlarm[engagedCatch]
+    decodeData[sessionId]['changeBehav'] = hit[engagedChange]
+    decodeData[sessionId]['catchBehav'] = falseAlarm[engagedCatch]
     
     for region in regions:
         inRegion = np.array(units['structure_acronym']==region)
@@ -462,6 +506,13 @@ for sessionIndex,sessionId in enumerate(sessionIds):
             decodeData[sessionId][region][layer]['nUnits'] = nUnits
             if not any(hasResp):
                 continue
+            
+            base = sp[hasResp,:,baseWin].sum(axis=2)
+            resp = np.full((hasResp.sum(),len(stim)),np.nan)
+            resp[:,1:] = sp[hasResp,1:,respWin].sum(axis=2) - base[:,:-1]
+            decodeData[sessionId][region][layer]['changeResp'] = resp[:,changeFlash[engagedChange]]
+            decodeData[sessionId][region][layer]['preChangeResp'] = resp[:,changeFlash[engagedChange]-1]
+            
             changeSp,preChangeSp = [s[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nChangeTrials,len(decodeWindows),decodeWindowSize)).sum(axis=-1) for s in (changeSp,preChangeSp)]
             catchSp = sp[hasResp][:,catchFlash[engagedCatch],:decodeWindows[-1]].reshape((nUnits,nCatchTrials,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
             
@@ -479,25 +530,30 @@ for sessionIndex,sessionId in enumerate(sessionIds):
                 else:
                     nSamples = nUnits
                     unitSamples = [[i] for i in range(nUnits)]
-                trainAccuracy = np.full((len(unitSamples),len(decodeWindows)),np.nan)
-                featureWeights = np.full((len(unitSamples),len(decodeWindows),nUnits,len(decodeWindows)),np.nan)
-                changeAccuracy = trainAccuracy.copy()
+                changeTrainAccuracy = np.full((len(unitSamples),len(decodeWindows)),np.nan)
+                changeFeatureWeights = np.full((len(unitSamples),len(decodeWindows),nUnits,len(decodeWindows)),np.nan)
+                changeAccuracy = changeTrainAccuracy.copy()
                 changePrediction = np.full((len(unitSamples),len(decodeWindows),nChangeTrials),np.nan)
                 changeConfidence = changePrediction.copy()
-                catchAccuracy = trainAccuracy.copy()
+                catchAccuracy = changeAccuracy.copy()
                 catchPrediction = np.full((len(unitSamples),len(decodeWindows),nCatchTrials),np.nan)
                 catchConfidence = catchPrediction.copy()
-                changeCatchAccuracy = trainAccuracy.copy()
+                changeCatchAccuracy = changeAccuracy.copy()
+                lickTrainAccuracy = changeAccuracy.copy()
+                lickFeatureWeights = changeFeatureWeights.copy()
+                lickAccuracy = changeAccuracy.copy()
+                lickPrediction = np.full((len(unitSamples),len(decodeWindows),nChangeTrials+nCatchTrials),np.nan)
+                lickConfidence = lickPrediction.copy()
                 for i,unitSamp in enumerate(unitSamples):
                     for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
                         if sampleSize!=20 and winEnd!=10:
                             continue
-                        X = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nChangeTrials,-1)) for s in (changeSp,preChangeSp)])
-                        y = np.zeros(X.shape[0])
-                        y[:nChangeTrials] = 1                        
-                        cv = crossValidate(model,X,y,nsplits=nCrossVal)
-                        trainAccuracy[i,j] = np.mean(cv['train_score'])
-                        featureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
+                        Xchange = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nChangeTrials,-1)) for s in (changeSp,preChangeSp)])
+                        Ychange = np.zeros(Xchange.shape[0])
+                        Ychange[:nChangeTrials] = 1                        
+                        cv = crossValidate(model,Xchange,Ychange,nCrossVal)
+                        changeTrainAccuracy[i,j] = np.mean(cv['train_score'])
+                        changeFeatureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
                         changeAccuracy[i,j] = np.mean(cv['test_score'])
                         changePrediction[i,j] = cv['predict'][:nChangeTrials]
                         changeConfidence[i,j] = cv['decision_function'][:nChangeTrials]
@@ -506,15 +562,28 @@ for sessionIndex,sessionId in enumerate(sessionIds):
                         catchPrediction[i,j] = scipy.stats.mode([estimator.predict(Xcatch) for estimator in cv['estimator']],axis=0)[0][0]
                         catchConfidence[i,j] = np.mean([estimator.decision_function(Xcatch) for estimator in cv['estimator']],axis=0)
                         changeCatchAccuracy[i,j] = (changeAccuracy[i,j]*nChangeTrials + catchAccuracy[i,j]*(nCatchTrials)) / (nChangeTrials+nCatchTrials)
-                decodeData[sessionId][region][layer][sampleSize]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
-                decodeData[sessionId][region][layer][sampleSize]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
+                        Xlick = np.concatenate((Xchange[:nChangeTrials],Xcatch))
+                        Ylick = np.concatenate((hit[engagedChange],falseAlarm[engagedCatch]))
+                        cv = crossValidate(model,Xlick,Ylick,nCrossVal)
+                        lickTrainAccuracy[i,j] = np.mean(cv['train_score'])
+                        lickFeatureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
+                        lickAccuracy[i,j] = np.mean(cv['test_score'])
+                        lickPrediction[i,j] = cv['predict']
+                        lickConfidence[i,j] = cv['decision_function']
+                decodeData[sessionId][region][layer][sampleSize]['changeTrainAccuracy'] = np.median(changeTrainAccuracy,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['changeFeatureWeights'] = np.nanmedian(changeFeatureWeights,axis=0)
                 decodeData[sessionId][region][layer][sampleSize]['changeAccuracy'] = np.median(changeAccuracy,axis=0) 
                 decodeData[sessionId][region][layer][sampleSize]['changePrediction'] = scipy.stats.mode(changePrediction,axis=0)[0][0]
                 decodeData[sessionId][region][layer][sampleSize]['changeConfidence'] = np.median(changeConfidence,axis=0)
                 decodeData[sessionId][region][layer][sampleSize]['catchAccuracy'] = np.median(catchAccuracy,axis=0) 
                 decodeData[sessionId][region][layer][sampleSize]['catchPrediction'] = scipy.stats.mode(catchPrediction,axis=0)[0][0] 
                 decodeData[sessionId][region][layer][sampleSize]['catchConfidence'] = np.median(catchConfidence,axis=0)
-                decodeData[sessionId][region][layer][sampleSize]['changeCatchAccuracy'] = np.median(changeCatchAccuracy,axis=0) 
+                decodeData[sessionId][region][layer][sampleSize]['changeCatchAccuracy'] = np.median(changeCatchAccuracy,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['lickTrainAccuracy'] = np.median(lickTrainAccuracy,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['lickFeatureWeights'] = np.nanmedian(lickFeatureWeights,axis=0)
+                decodeData[sessionId][region][layer][sampleSize]['lickAccuracy'] = np.median(lickAccuracy,axis=0) 
+                decodeData[sessionId][region][layer][sampleSize]['lickPrediction'] = scipy.stats.mode(lickPrediction,axis=0)[0][0]
+                decodeData[sessionId][region][layer][sampleSize]['lickConfidence'] = np.median(lickConfidence,axis=0)
 warnings.filterwarnings('default')
 
 # save result to pkl file
@@ -545,7 +614,7 @@ for i,region in enumerate(regions):
             nUnits = []
             for sampleSize in unitSampleSize:
                 lyr = layer if 'VIS' in region else layers[0]
-                d = [decodeData[sessionId][region][lyr][sampleSize]['changeCatchAccuracy'][-1] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
+                d = [decodeData[sessionId][region][lyr][sampleSize]['changeCatchAccuracy'][winInd] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
                 mean.append(np.mean(d))
                 sem.append(np.std(d)/(len(d)**0.5))
                 nUnits.append(len(d))
@@ -569,13 +638,34 @@ plt.tight_layout()
 
 sampleSize = 20
 
+fig = plt.figure(figsize=(10,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
+    for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+        lyr = layer if 'VIS' in region else layers[0]
+        d = [decodeData[sessionId][region][lyr][sampleSize]['changeCatchAccuracy'] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
+        if len(d)>0:
+            m = np.mean(d,axis=0)
+            s = np.std(d,axis=0)/(len(d)**0.5)
+            ax.plot(decodeWindows-decodeWindowSize/2,m,color=clr,label=region)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([0.45,0.85])
+    ax.set_xlabel('Time from change (s)')
+    ax.set_ylabel('Change decoding accuracy')
+    if i==0:
+        ax.legend(loc='upper left')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
+
+fig = plt.figure(figsize=(10,8))
 xticks = np.arange(len(regions))
-for layer in layers:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
     for x,region in enumerate(regions):
         lyr = layer if 'VIS' in region else layers[0]
-        d = [decodeData[sessionId][region][lyr][sampleSize]['changeCatchAccuracy'][-1] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
+        d = [decodeData[sessionId][region][lyr][sampleSize]['changeCatchAccuracy'][winInd] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
         m = np.mean(d)
         s = np.std(d)/(len(d)**0.5)
         ax.plot(x,m,'ko')
@@ -587,23 +677,8 @@ for layer in layers:
     ax.set_xticklabels(regions)
     ax.set_ylim([0.5,1])
     ax.set_ylabel('Change decoding accuracy')
-    plt.tight_layout()
-    
-for layer in layers:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
-    for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
-        lyr = layer if 'VIS' in region else layers[0]
-        d = [decodeData[sessionId][region][lyr][sampleSize]['changeCatchAccuracy'] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
-        if len(d)>0:
-            m = np.mean(d,axis=0)
-            s = np.std(d,axis=0)/(len(d)**0.5)
-            ax.plot(decodeWindows,m,color=clr)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_ylim([0.45,0.85])
-    plt.tight_layout()
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
     
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -613,22 +688,76 @@ for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
         d = np.concatenate(d)
         m = np.nanmean(d,axis=0)
         s = np.std(d,axis=0)/(len(d)**0.5)
-        ax.plot(decodeWindows,m,color=clr)
+        ax.plot(decodeWindows-decodeWindowSize/2,m,color=clr,label=region)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('Time from change (s)')
+ax.set_ylabel('Decoder weighting')
+ax.legend(loc='upper left')
 plt.tight_layout()
 
-for layer in layers:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
+fig = plt.figure(figsize=(10,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
+    for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+        lyr = layer if 'VIS' in region else layers[0]
+        w = []
+        cmi = []
+        for sessionId in sessionIds:
+            if len(decodeData[sessionId][region][lyr][sampleSize])>0:
+                w.append(np.nanmax(decodeData[sessionId][region][lyr][sampleSize]['featureWeights'][winInd],axis=1))
+                changeResp,preChangeResp = [decodeData[sessionId][region][lyr][resp].mean(axis=1) for resp in ('changeResp','preChangeResp')]
+                cmi.append((changeResp - preChangeResp) / (changeResp + preChangeResp))
+        if len(w)>0:
+            ax.plot(np.concatenate(cmi),np.concatenate(w),'o',mec=clr,mfc='none',alpha=0.25,label=region)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlabel('Change modulation index')
+    ax.set_ylabel('Decoder weighting')
+    ax.legend(loc='upper left')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
+
+fig = plt.figure(figsize=(10,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
+    for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))): 
+        lyr = layer if 'VIS' in region else layers[0]
+        r = []
+        for sessionId in sessionIds:
+            if len(decodeData[sessionId][region][lyr][sampleSize])>0:
+                b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeBehav','catchBehav')])
+                r.append([])
+                for j,_ in enumerate(decodeWindows):
+                    d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][conf][j] for conf in ('changeConfidence','catchConfidence')])
+                    r[-1].append(np.corrcoef(b,d)[0,1])
+        if len(r)>0:
+            m = np.mean(r,axis=0)
+            s = np.std(r,axis=0)/(len(r)**0.5)
+            ax.plot(decodeWindows-decodeWindowSize/2,m,color=clr,label=region)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    # ax.set_ylim([0.45,0.85])
+    ax.set_xlabel('Time from change (s)')
+    ax.set_ylabel('Correlation of decoder confidence and behavior')
+    if i==0:
+        ax.legend(loc='upper left')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
+
+fig = plt.figure(figsize=(10,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
     for x,region in enumerate(regions):
         lyr = layer if 'VIS' in region else layers[0]
         r = []
         for sessionId in sessionIds:
             if len(decodeData[sessionId][region][lyr][sampleSize])>0:
-                b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeResp','catchResp')])
-                d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][conf][-1] for conf in ('changeConfidence','catchConfidence')])
+                b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeBehav','catchBehav')])
+                d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][conf][winInd] for conf in ('changeConfidence','catchConfidence')])
                 r.append(np.corrcoef(b,d)[0,1])
         m = np.mean(r)
         s = np.std(r)/(len(r)**0.5)
@@ -640,18 +769,20 @@ for layer in layers:
     ax.set_xticks(xticks)
     ax.set_xticklabels(regions)
     ax.set_ylim([0,0.5])
-    plt.tight_layout()
+    ax.set_ylabel('Correlation of decoder confidence and behavior')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
     
-for layer in layers:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
+fig = plt.figure(figsize=(10,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
     for x,region in enumerate(regions):
         lyr = layer if 'VIS' in region else layers[0]
         js = []
         for sessionId in sessionIds:
             if len(decodeData[sessionId][region][lyr][sampleSize])>0:
-                b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeResp','catchResp')])
-                d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][pred][-1] for pred in ('changePrediction','catchPrediction')]).astype(bool)
+                b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeBehav','catchBehav')])
+                d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][pred][winInd] for pred in ('changePrediction','catchPrediction')]).astype(bool)
                 js.append((b & d).sum() / (b | d).sum())
         m = np.mean(js)
         s = np.std(js)/(len(js)**0.5)
@@ -662,34 +793,43 @@ for layer in layers:
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xticks(xticks)
     ax.set_xticklabels(regions)
-    # ax.set_ylim([0,0.5])
-    plt.tight_layout()
-
-alim = [-0.5,4]    
-for layer in layers:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
+    ax.set_ylim([0.4,0.8])
+    ax.set_ylabel('Jaccard similarity between decoder and behavior')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
+  
+fig = plt.figure(figsize=(10,8))
+alim = [-0.5,4]  
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(2,2,i+1)
     ax.plot(alim,alim,'--',color='0.75')
     for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
         lyr = layer if 'VIS' in region else layers[0]
         d = []
         for sessionId in sessionIds:
             if len(decodeData[sessionId][region][lyr][sampleSize])>0:
-                changeResp = decodeData[sessionId]['changeResp']
-                catchResp = decodeData[sessionId]['catchResp']
-                changePred = decodeData[sessionId][region][lyr][sampleSize]['changePrediction'][-1]
-                catchPred = decodeData[sessionId][region][lyr][sampleSize]['catchPrediction'][-1]
-                d.append([calcDprime(change.sum()/change.size,catch.sum()/catch.size,change.size,catch.size) for change,catch in zip((changeResp,changePred),(catchResp,catchPred))])        
+                changeBehav = decodeData[sessionId]['changeBehav']
+                catchBehav = decodeData[sessionId]['catchBehav']
+                changePred = decodeData[sessionId][region][lyr][sampleSize]['changePrediction'][winInd]
+                catchPred = decodeData[sessionId][region][lyr][sampleSize]['catchPrediction'][winInd]
+                d.append([calcDprime(change.sum()/change.size,catch.sum()/catch.size,change.size,catch.size) for change,catch in zip((changeBehav,changePred),(catchBehav,catchPred))])        
         if len(d)>0:
             d = np.array(d)
-            ax.plot(d[:,0],d[:,1],'o',mec=clr,mfc='none')
+            ax.plot(d[:,0],d[:,1],'o',mec=clr,mfc='none',label=region)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(np.arange(5))
+    ax.set_yticks(np.arange(5))
     ax.set_xlim(alim)
     ax.set_ylim(alim)
     ax.set_aspect('equal')
-    plt.tight_layout()
+    ax.set_xlabel('d\' behavior')
+    ax.set_ylabel('d\' decoder')
+    if i==0:
+        ax.legend(loc='upper left')
+    ax.set_title('cortical layer '+str(layer))
+plt.tight_layout()
 
 
 
