@@ -86,9 +86,29 @@ unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
+sessionIds = stimTable['session_id'].unique()
+# sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
+
 binSize = 0.001
 baseWin = slice(680,750)
 respWin = slice(30,100)
+
+regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+           'MRN','MB',('SCig','SCiw'),'APN','NOT',
+           ('HPF','DG','CA1','CA3'),('SUB','ProS','PRE','POST'))
+layers = ('all',('1','2/3'),'4','5',('6a','6b'))
+regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
+layerColors = plt.cm.magma(np.linspace(0,0.8,len(layers)))
+regionLabels = []
+for region in regions:
+    if 'SCig' in region:
+        regionLabels.append('SC')
+    elif 'HPF' in region:
+        regionLabels.append('Hipp')
+    elif 'SUB' in region:
+        regionLabels.append('Sub')
+    else:
+        regionLabels.append(region)
 
 
 def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
@@ -109,9 +129,9 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
 ## count responsive units
 sessionIds = stimTable['session_id'].unique()
 
-regions = np.unique(unitTable['structure_acronym'])
+allRegions = np.unique(unitTable['structure_acronym'])
 
-nUnits = {region: [] for region in regions}
+nUnits = {region: [] for region in allRegions}
 
 for sessionIndex,sessionId in enumerate(sessionIds):
     print('session '+str(sessionIndex+1))
@@ -122,7 +142,7 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
     changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
     
-    for region in regions:
+    for region in allRegions:
         print(region)
         inRegion = np.array(units['structure_acronym']==region)
         if any(inRegion):
@@ -148,11 +168,6 @@ nUnits = pickle.load(open(pkl,'rb'))
 
 
 ## adaptation
-sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
-
-regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP','MRN')
-layers = (('1','2/3'),'4','5',('6a','6b'))
-
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
 preChangeSpikes = copy.deepcopy(changeSpikes)  
 changeResp = copy.deepcopy(changeSpikes)
@@ -173,17 +188,17 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     notOmitted = [flash for flash in changeFlash if not any(stim[flash-1:flash+10]['omitted']) and flash+10<spikes.shape[1]]
     
     for region in regions:
-        inRegion = np.array(units['structure_acronym']==region)
+        inRegion = np.in1d(units['structure_acronym'],region)
         if not any(inRegion):
             continue
         for layer in layers:
-            print('session '+str(sessionIndex+1)+', '+region+', '+str(layer))
-            if 'VIS' in region:
-                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
-            elif '1' not in layer:
-                break
-            else:
+            print('session '+str(sessionIndex+1)+', '+str(region)+', '+str(layer))
+            if layer=='all':
                 inLayer = inRegion
+            elif 'VIS' in region:
+                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
+            else:
+                continue
             if not any(inLayer):
                 continue
             s = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
@@ -245,26 +260,26 @@ flashTimes = np.arange(-0.75,7.5,0.75)
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+for region,clr,lbl in zip(regions,regionColors,regionLabels):
     if 'VIS' in region:
         d = np.concatenate([np.concatenate(adaptSpikes[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
     else:
         d = np.concatenate(adaptSpikes[region][layers[0]])
     d -= d[:,baseWin].mean(axis=1)[:,None]
     d /= binSize
-    ax.plot(t,d.mean(axis=0),color=clr,alpha=0.5,label=region+', n='+str(d.shape[0]))            
+    ax.plot(t,d.mean(axis=0),color=clr,alpha=0.5,label=lbl+', n='+str(d.shape[0]))            
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlim([-0.25,7.5])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Spikes/s')
-ax.legend(loc='upper center')
+ax.legend(loc='upper center',fontsize=8)
 plt.tight_layout()
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+for region,clr,lbl in zip(regions,regionColors,regionLabels):
     if 'VIS' in region:
         d = np.concatenate([np.concatenate(adaptResp[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
     else:
@@ -273,7 +288,7 @@ for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
     d[np.isinf(d)] = np.nan
     mean = np.nanmean(d,axis=0)
     sem = np.nanstd(d,axis=0)/(d.shape[0]**0.5)
-    ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=region)
+    ax.plot(flashTimes,mean,color=clr,alpha=0.5,label=lbl)
     for x,m,s in zip(flashTimes,mean,sem):
         ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)
 for side in ('right','top'):
@@ -283,13 +298,13 @@ ax.set_xlim([-1,7.5])
 ax.set_ylim([0,1.01])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Norm. response')
-ax.legend(loc='lower right')
+ax.legend(loc='upper center',fontsize=8)
 plt.tight_layout()
 
 fig = plt.figure(figsize=(6,11))
 for i,region in enumerate(r for r in regions if 'VIS' in r):
     ax = fig.add_subplot(6,1,i+1)
-    for layer,clr in zip(layers,plt.cm.magma(np.linspace(0,0.8,len(layers)))):
+    for layer,clr in zip(layers,layerColors):
         if len(adaptSpikes[region][layer])>0:
             d = np.concatenate(adaptSpikes[region][layer])
             d -= d[:,baseWin].mean(axis=1)[:,None]
@@ -302,14 +317,14 @@ for i,region in enumerate(r for r in regions if 'VIS' in r):
     if i==5:
         ax.set_xlabel('Time from change (s)')
     ax.set_ylabel('Spikes/s')
-    ax.legend(loc='upper center')
+    ax.legend(loc='upper center',fontsize=8)
     ax.set_title(region)
 plt.tight_layout()
 
 fig = plt.figure(figsize=(6,11))
 for i,region in enumerate(r for r in regions if 'VIS' in r):
     ax = fig.add_subplot(6,1,i+1)
-    for layer,clr in zip(layers,plt.cm.magma(np.linspace(0,0.8,len(layers)))):
+    for layer,clr in zip(layers,layerColors):
         if len(adaptSpikes[region][layer])>0:
             d = np.concatenate(adaptResp[region][layer])
             d /= d[:,1][:,None]
@@ -328,14 +343,14 @@ for i,region in enumerate(r for r in regions if 'VIS' in r):
         ax.set_xlabel('Time from change (s)')
     if i==0:
         ax.set_ylabel('Norm. response')
-        ax.legend(loc='upper center')
+        ax.legend(loc='upper center',fontsize=8)
     ax.set_title(region)
 plt.tight_layout()
 
-fig = plt.figure(figsize=(6,8))
+fig = plt.figure(figsize=(10,8))
 xticks = np.arange(len(regions))
 for i,layer in enumerate(layers):
-    ax = fig.add_subplot(4,1,i+1)
+    ax = fig.add_subplot(5,1,i+1)
     mean = []
     sem = []
     for region in regions:
@@ -354,7 +369,7 @@ for i,layer in enumerate(layers):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xticks(xticks)
-    ax.set_xticklabels(regions)
+    ax.set_xticklabels(regionLabels)
     ax.set_ylim([0,1.01])
     ax.set_ylabel('Adaptation ratio')
     ax.set_title('cortical layer '+str(layer))
@@ -363,11 +378,11 @@ plt.tight_layout()
 
 flashSinceLickTimes = np.arange(0.75,0.75*13,0.75)
 for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash resp','pre-flash baseline','change resp','pre-change baseline')):
-    fig = plt.figure(figsize=(6,8))
+    fig = plt.figure(figsize=(7,11))
     for i,layer in enumerate(layers):
-        ax = fig.add_subplot(4,1,i+1)
+        ax = fig.add_subplot(5,1,i+1)
         ymax = 0
-        for region,clr in zip(regions,plt.cm.magma(np.linspace(0,0.8,len(regions)))):
+        for region,clr,lbl in zip(regions,regionColors,regionLabels):
             if 'VIS' in region:
                 d = np.concatenate(r[region][layer])
             else:
@@ -375,7 +390,7 @@ for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash 
             d /= (respWin.stop-respWin.start)/1000
             mean = np.nanmean(d,axis=0)
             sem = np.nanstd(d,axis=0)/(d.shape[0]**0.5)
-            lbl = region if i==0 else None
+            lbl = lbl if i==0 else None
             ax.plot(flashSinceLickTimes,mean,color=clr,alpha=0.5,label=lbl)
             for x,m,s in zip(flashSinceLickTimes,mean,sem):
                 ax.plot([x,x],[m-s,m+s],color=clr,alpha=0.5)
@@ -389,7 +404,7 @@ for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash 
         ax.set_ylabel(ylbl+'\n(spikes/s)')
         if i==0:
             loc = 'upper left' if 'change' in ylbl else 'upper right'
-            ax.legend(loc=loc)
+            ax.legend(loc=loc,fontsize=5)
         ax.set_title('cortical layer '+str(layer))
     plt.tight_layout()
 
@@ -436,13 +451,6 @@ def crossValidate(model,X,y,nSplits):
                 cv[attr[:-1]].append(getattr(estimator,attr))
     return cv
 
-
-sessionIds = stimTable['session_id'].unique()
-
-regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-           'MRN','MB',('SCig','SCiw'),'APN','NOT',
-           ('HPF','DG','CA1','CA3'),('SUB','ProS','PRE','POST'))
-layers = ('all',('1','2/3'),'4','5',('6a','6b'))
 
 model = LinearSVC(C=1.0,max_iter=1e4)
 
@@ -610,18 +618,6 @@ decodeData = pickle.load(open(pkl,'rb'))
 #
 sampleSize = 20        
 winInd = np.where(decodeWindows==respWin.stop)[0][0]
-regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
-layerColors = plt.cm.magma(np.linspace(0,0.8,len(layers)))
-regionLabels = []
-for region in regions:
-    if 'SCig' in region:
-        regionLabels.append('SC')
-    elif 'HPF' in region:
-        regionLabels.append('Hipp')
-    elif 'SUB' in region:
-        regionLabels.append('Sub')
-    else:
-        regionLabels.append(region)
 
 # unit sample size        
 fig = plt.figure(figsize=(14,8))       
@@ -651,9 +647,9 @@ for i,region in enumerate(regions):
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xlim([0,1.05*max(unitSampleSize)])
     ax.set_ylim([0.5,1])
-    if i==3:
+    if i==5:
         ax.set_ylabel('Change decoding accuracy')
-    if i==7:
+    if i==12:
         ax.set_xlabel('Number of neurons')
     ax.set_title(region)
     if region=='VISp':
@@ -677,7 +673,7 @@ for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlim([0,1.05*max(unitSampleSize)])
-ax.set_ylim([0.5,0.85])
+ax.set_ylim([0.5,1])
 ax.set_xlabel('Number of neurons (from each of at least 3 sessions)')
 ax.set_ylabel('Change decoding accuracy')
 ax.legend(loc='upper left',fontsize=6)
@@ -796,7 +792,7 @@ for i,layer in enumerate(layers):
     ax.set_xticks(xticks)
     ax.set_xticklabels(regionLabels)
     ax.set_ylim([0,0.8])
-    if i==0:
+    if i==2:
         ax.set_ylabel('Correlation of decoder confidence and behavior')
     ax.set_title('cortical layer '+str(layer))
     if i==0:
@@ -827,7 +823,7 @@ for i,layer in enumerate(layers):
     ax.set_xticks(xticks)
     ax.set_xticklabels(regionLabels)
     ax.set_ylim([0.4,0.9])
-    if i==0:
+    if i==2:
         ax.set_ylabel('Jaccard similarity between decoder and behavior')
     ax.set_title('cortical layer '+str(layer))
     if i==0:
@@ -943,6 +939,68 @@ ax.set_yticks([])
 ax.legend(loc='center',fontsize=8)
 plt.tight_layout()
 
+fig = plt.figure(figsize=(12,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(3,2,i+1)
+    for x,region in enumerate(regions):
+        lyr = layer if 'VIS' in region else layers[0]
+        for winEnd,mfc in zip((100,200),('k','none')):
+            j = np.where(decodeWindows==winEnd)[0][0]
+            d = [decodeData[sessionId][region][lyr][sampleSize]['lickBalancedAccuracy'][j] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
+            if len(d)>0:
+                m = np.mean(d)
+                s = np.std(d)/(len(d)**0.5)
+                lbl = str(winEnd)+' ms' if region=='VISp' else None
+                ax.plot(x,m,'ko',mfc=mfc,label=lbl)
+                ax.plot([x,x],[m-s,m+s],'k')
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(regionLabels)
+    ax.set_ylim([0.45,1])
+    if i==2:
+        ax.set_ylabel('Lick decoding balanced accuracy')
+    ax.set_title('cortical layer '+str(layer))
+    if i==0:
+        ax.legend(loc='upper left')
+plt.tight_layout()
+
+layer = 'all'
+x = decodeWindows-decodeWindowSize/2      
+for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
+    if lbl not in ('SC','MRN'):
+        continue
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for resp,clr in zip(('hit','miss','false alarm','correct reject'),'krgb'):
+        d = []
+        for sessionId in sessionIds:
+            if len(decodeData[sessionId][region][layer][sampleSize])>0:
+                changeBehav = decodeData[sessionId]['changeBehav']
+                catchBehav = decodeData[sessionId]['catchBehav']
+                if resp=='hit':
+                    trials = np.concatenate((changeBehav,np.zeros_like(catchBehav)))
+                elif resp=='miss':
+                    trials = np.concatenate((~changeBehav,np.zeros_like(catchBehav)))
+                elif resp=='false alarm':
+                    trials = np.concatenate((np.zeros_like(changeBehav),catchBehav))
+                elif resp=='correct reject':
+                    trials = np.concatenate((np.zeros_like(changeBehav),~catchBehav))
+                d.append(np.mean(decodeData[sessionId][region][layer][sampleSize]['lickConfidence'][:,trials],axis=1))
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d,axis=0)/(len(d)**0.5)
+        ax.plot(x,m,color=clr,label=resp)
+        ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlabel('Time from change/catch (ms)')
+    ax.set_ylabel('Lick decoder confidence')
+    ax.legend()
+    ax.set_title(region)
+plt.tight_layout()
+
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for region,clr,lbl in zip(regions,regionColors,regionLabels):
@@ -986,7 +1044,37 @@ plt.tight_layout()
 
 
 
-
+#
+fig = plt.figure(figsize=(12,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(3,2,i+1)
+    for x,region in enumerate(regions):
+        lyr = layer if 'VIS' in region else layers[0]
+        for winEnd,mfc in zip((80,100,150,200),('b','k','r','none')):
+            j = np.where(decodeWindows==winEnd)[0][0]
+            r = []
+            for sessionId in sessionIds:
+                if len(decodeData[sessionId][region][lyr][sampleSize])>0:
+                    b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeBehav',)])
+                    d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][conf][j] for conf in ('changeConfidence',)])
+                    r.append(np.corrcoef(b,d)[0,1])
+            m = np.nanmean(r)
+            s = np.nanstd(r)/(len(r)**0.5)
+            lbl = str(winEnd)+' ms' if region=='VISp' else None
+            ax.plot(x,m,'ko',mfc=mfc,label=lbl)
+            ax.plot([x,x],[m-s,m+s],'k')
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(regionLabels)
+    ax.set_ylim([-0.1,0.6])
+    if i==2:
+        ax.set_ylabel('Correlation of decoder confidence and behavior')
+    ax.set_title('cortical layer '+str(layer))
+    if i==0:
+        ax.legend(loc='upper left')
+plt.tight_layout()
 
 
 
