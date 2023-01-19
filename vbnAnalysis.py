@@ -237,7 +237,9 @@ for sessionIndex,sessionId in enumerate(sessionIds):
                 lastLick = row['flashes_since_last_lick']
                 if not np.isnan(lastLick) and lastLick<13:
                     ind = int(lastLick)-1
-                    if not row['previous_omitted'] and lastLick < row['flashes_since_change']:
+                    if (not row['omitted'] and not row['previous_omitted']
+                        and row['flashes_since_change'] > 5
+                        and lastLick < row['flashes_since_change']):
                         flashCount[ind] += 1
                         fb[:,ind] += base[:,i-1]
                         fr[:,ind] += resp[:,i]
@@ -261,10 +263,7 @@ flashTimes = np.arange(-0.75,7.5,0.75)
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for region,clr,lbl in zip(regions,regionColors,regionLabels):
-    if 'VIS' in region:
-        d = np.concatenate([np.concatenate(adaptSpikes[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
-    else:
-        d = np.concatenate(adaptSpikes[region][layers[0]])
+    d = np.concatenate(adaptSpikes[region]['all'])
     d -= d[:,baseWin].mean(axis=1)[:,None]
     d /= binSize
     ax.plot(t,d.mean(axis=0),color=clr,alpha=0.5,label=lbl+', n='+str(d.shape[0]))            
@@ -280,10 +279,7 @@ plt.tight_layout()
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for region,clr,lbl in zip(regions,regionColors,regionLabels):
-    if 'VIS' in region:
-        d = np.concatenate([np.concatenate(adaptResp[region][layer]) for layer in layers if len(adaptSpikes[region][layer])>0])
-    else:
-        d = np.concatenate(adaptResp[region][layers[0]])
+    d = np.concatenate(adaptResp[region]['all'])
     d /= d[:,1][:,None]
     d[np.isinf(d)] = np.nan
     mean = np.nanmean(d,axis=0)
@@ -409,7 +405,7 @@ for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash 
     plt.tight_layout()
 
 
-## decoding
+## change/lick decoding
 def crossValidate(model,X,y,nSplits):
     # cross validation using stratified shuffle split
     # each split preserves the percentage of samples of each class
@@ -1022,7 +1018,7 @@ plt.tight_layout()
 fig = plt.figure(figsize=(16,8))
 layer = 'all' 
 x = decodeWindows-decodeWindowSize/2      
-for i,region in enumerate(regions):
+for i,region,lbl in enumerate(zip(regions,regionLabels)):
     ax = fig.add_subplot(3,5,i+1)
     for resp,clr in zip(('hit','miss','false alarm','correct reject'),'krgb'):
         d = np.concatenate([decodeData[sessionId][region][layer]['psth'][resp][0] for sessionId in sessionIds if len(decodeData[sessionId][region][layer]['psth'][resp])>0])
@@ -1033,30 +1029,61 @@ for i,region in enumerate(regions):
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    # ax.set_xlim([0,200])
     ax.set_xlabel('Time from change/catch (ms)')
     ax.set_ylabel('Spikes/s')
     if i==0:
         ax.legend()
-    ax.set_title(region)
+    ax.set_title(lbl)
 plt.tight_layout()
 
+# change decoding vs behavior correlation without catch trials
+fig = plt.figure(figsize=(10,8))
+for i,layer in enumerate(layers):
+    ax = fig.add_subplot(3,2,i+1)
+    for region,clr in zip(regions,regionColors): 
+        lyr = layer if 'VIS' in region else layers[0]
+        r = []
+        for sessionId in sessionIds:
+            if len(decodeData[sessionId][region][lyr][sampleSize])>0:
+                b = decodeData[sessionId]['changeBehav']
+                r.append([])
+                for j,_ in enumerate(decodeWindows):
+                    d = decodeData[sessionId][region][lyr][sampleSize]['changeConfidence'][j]
+                    r[-1].append(np.corrcoef(b,d)[0,1])
+        if len(r)>0:
+            m = np.nanmean(r,axis=0)
+            s = np.nanstd(r,axis=0)/(len(r)**0.5)
+            ax.plot(decodeWindows-decodeWindowSize/2,m,color=clr,label=region)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([-0.1,0.8])
+    ax.set_xlabel('Time from change (ms)')
+    if i==2:
+        ax.set_ylabel('Correlation of decoder confidence and behavior')
+    ax.set_title('cortical layer '+str(layer))
+ax = fig.add_subplot(3,2,6)
+for lbl,clr in zip(regionLabels,regionColors):
+    ax.plot([],color=clr,label=lbl)
+for side in ('right','top','left','bottom'):
+    ax.spines[side].set_visible(False)
+ax.set_xticks([])
+ax.set_yticks([])
+ax.legend(loc='center',fontsize=8)
+plt.tight_layout()
 
-
-
-#
 fig = plt.figure(figsize=(12,8))
 for i,layer in enumerate(layers):
     ax = fig.add_subplot(3,2,i+1)
     for x,region in enumerate(regions):
         lyr = layer if 'VIS' in region else layers[0]
-        for winEnd,mfc in zip((80,100,150,200),('b','k','r','none')):
+        for winEnd,mfc in zip((100,200),('k','none')):
             j = np.where(decodeWindows==winEnd)[0][0]
             r = []
             for sessionId in sessionIds:
                 if len(decodeData[sessionId][region][lyr][sampleSize])>0:
-                    b = np.concatenate([decodeData[sessionId][resp] for resp in ('changeBehav',)])
-                    d = np.concatenate([decodeData[sessionId][region][lyr][sampleSize][conf][j] for conf in ('changeConfidence',)])
+                    b = decodeData[sessionId]['changeBehav']
+                    d = decodeData[sessionId][region][lyr][sampleSize]['changeConfidence'][j]
                     r.append(np.corrcoef(b,d)[0,1])
             m = np.nanmean(r)
             s = np.nanstd(r)/(len(r)**0.5)
@@ -1077,7 +1104,94 @@ for i,layer in enumerate(layers):
 plt.tight_layout()
 
 
+# non-change lick decoding
+lickDecodeData = {sessionId: {region: {layer: {} for layer in layers} for region in regions} for sessionId in sessionIds}
+sampleSize = 20
+decodeWindowEnd = 250
+decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
+warnings.filterwarnings('ignore')
+for sessionIndex,sessionId in enumerate(sessionIds):
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes = np.array(stim['start_time'])
+    changeTimes = flashTimes[stim['is_change']]
+    hit = np.array(stim['hit'][stim['is_change']])
+    engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
+    nonChangeFlashes = np.array(engaged &
+                                (~stim['is_change']) & 
+                                (~stim['omitted']) & 
+                                (~stim['previous_omitted']) & 
+                                (stim['flashes_since_change']>5) &
+                                (stim['flashes_since_last_lick']>1))
+    lick = np.array(stim['lick_for_flash'])[nonChangeFlashes]
+    
+    lickDecodeData[sessionId]['image'] = np.array(stim['image_name'])[nonChangeFlashes]
+    lickDecodeData[sessionId]['flashesSinceLick'] = np.array(stim['flashes_since_last_lick'])[nonChangeFlashes]
+    lickDecodeData[sessionId]['lick'] = lick
+    
+    nFlashes = nonChangeFlashes.sum()
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+        for layer in ('all',):
+            print('session '+str(sessionIndex+1)+', '+str(region)+', '+str(layer))
+            if layer=='all':
+                inLayer = inRegion
+            elif 'VIS' in region:
+                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
+            else:
+                continue
+            if not any(inLayer):
+                continue
+            sp = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(inLayer)[0]):
+                sp[i]=spikes[u,:,:]
+                
+            changeSp = sp[:,changeFlash,:]
+            preChangeSp = sp[:,changeFlash-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+            nUnits = hasResp.sum()
+            if nUnits < sampleSize:
+                continue
+            flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nFlashes,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
+            
+            if sampleSize>1:
+                if sampleSize==nUnits:
+                    nSamples = 1
+                    unitSamples = [np.arange(nUnits)]
+                else:
+                    # >99% chance each neuron is chosen at least once
+                    nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
+                    unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
+            else:
+                nSamples = nUnits
+                unitSamples = [[i] for i in range(nUnits)]
+            trainAccuracy = np.full((len(unitSamples),len(decodeWindows)),np.nan)
+            featureWeights = np.full((len(unitSamples),len(decodeWindows),nUnits,len(decodeWindows)),np.nan)
+            accuracy = trainAccuracy.copy()
+            balancedAccuracy = accuracy.copy()
+            prediction = np.full((len(unitSamples),len(decodeWindows),nFlashes),np.nan)
+            confidence = prediction.copy()
+            for i,unitSamp in enumerate(unitSamples):
+                for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
+                    X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nFlashes,-1))                        
+                    cv = crossValidate(model,X,lick,nCrossVal)
+                    trainAccuracy[i,j] = np.mean(cv['train_score'])
+                    featureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
+                    accuracy[i,j] = np.mean(cv['test_score'])
+                    balancedAccuracy[i,j] = sklearn.metrics.balanced_accuracy_score(lick,cv['predict'])
+                    prediction[i,j] = cv['predict']
+                    confidence[i,j] = cv['decision_function']
+            lickDecodeData[sessionId][region][layer]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
+            lickDecodeData[sessionId][region][layer]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
+            lickDecodeData[sessionId][region][layer]['accuracy'] = np.median(accuracy,axis=0)
+            lickDecodeData[sessionId][region][layer]['balancedAccuracy'] = np.median(balancedAccuracy,axis=0) 
+            lickDecodeData[sessionId][region][layer]['prediction'] = scipy.stats.mode(prediction,axis=0)[0][0]
+            lickDecodeData[sessionId][region][layer]['confidence'] = np.median(confidence,axis=0)
+warnings.filterwarnings('default')
 
 
 
