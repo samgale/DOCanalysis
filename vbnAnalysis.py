@@ -1107,7 +1107,7 @@ plt.tight_layout()
 # non-change lick decoding
 lickDecodeData = {sessionId: {region: {layer: {} for layer in layers} for region in regions} for sessionId in sessionIds}
 sampleSize = 20
-decodeWindowEnd = 250
+decodeWindowEnd = 500
 decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
 warnings.filterwarnings('ignore')
@@ -1119,6 +1119,8 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     changeTimes = flashTimes[stim['is_change']]
     hit = np.array(stim['hit'][stim['is_change']])
     engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    changeFlash = np.where(stim['is_change'] & ~autoRewarded & engaged)[0]
     nonChangeFlashes = np.array(engaged &
                                 (~stim['is_change']) & 
                                 (~stim['omitted']) & 
@@ -1194,7 +1196,45 @@ for sessionIndex,sessionId in enumerate(sessionIds):
 warnings.filterwarnings('default')
 
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+lyr = 'all'
+for region,clr,lbl in zip(regions,regionColors,regionLabels):
+    d = [lickDecodeData[sessionId][region][lyr]['balancedAccuracy'] for sessionId in sessionIds if len(lickDecodeData[sessionId][region][lyr])>0]
+    if len(d)>0:
+        m = np.mean(d,axis=0)
+        s = np.std(d,axis=0)/(len(d)**0.5)
+        ax.plot(decodeWindows-decodeWindowSize/2,m,color=clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([0.4,0.8])
+ax.set_xlabel('Time from change (ms)')
+ax.set_ylabel('Lick decoding balanced accuracy')
+ax.legend(loc='upper left',fontsize=8)
+plt.tight_layout()
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for x,region in enumerate(regions):
+    for winEnd,mfc in zip((100,200),('k','none')):
+        j = np.where(decodeWindows==winEnd)[0][0]
+        d = [lickDecodeData[sessionId][region][lyr]['balancedAccuracy'][j] for sessionId in sessionIds if len(lickDecodeData[sessionId][region][lyr])>0]
+        if len(d)>0:
+            m = np.nanmean(d)
+            s = np.nanstd(d)/(len(d)**0.5)
+            lbl = str(winEnd)+' ms' if region=='VISp' else None
+            ax.plot(x,m,'ko',mfc=mfc,label=lbl)
+            ax.plot([x,x],[m-s,m+s],'k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(np.arange(len(regions)))
+ax.set_xticklabels(regionLabels)
+ax.set_ylim([0.4,0.8])
+ax.set_ylabel('Lick decoding balanced accuracy')
+ax.legend(loc='upper left')
+plt.tight_layout()
 
 
 
