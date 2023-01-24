@@ -1208,8 +1208,8 @@ for region,clr,lbl in zip(regions,regionColors,regionLabels):
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_ylim([0.4,0.8])
-ax.set_xlabel('Time from change (ms)')
+ax.set_ylim([0.45,0.85])
+ax.set_xlabel('Time from non-change flash onset (ms)')
 ax.set_ylabel('Lick decoding balanced accuracy')
 ax.legend(loc='upper left',fontsize=8)
 plt.tight_layout()
@@ -1231,14 +1231,98 @@ for side in ('right','top'):
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(np.arange(len(regions)))
 ax.set_xticklabels(regionLabels)
-ax.set_ylim([0.4,0.8])
+ax.set_ylim([0.45,0.85])
 ax.set_ylabel('Lick decoding balanced accuracy')
 ax.legend(loc='upper left')
 plt.tight_layout()
 
+x = decodeWindows-decodeWindowSize/2      
+for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
+    if lbl not in ('SC','MRN'):
+        continue
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for resp,clr in zip(('lick','no lick'),'gm'):
+        d = []
+        for sessionId in sessionIds:
+            if len(lickDecodeData[sessionId][region]['all'])>0:
+                lick = lickDecodeData[sessionId]['lick']
+                if resp=='no lick':
+                    lick = ~lick
+                d.append(np.mean(lickDecodeData[sessionId][region]['all']['confidence'][:,lick],axis=1))
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d,axis=0)/(len(d)**0.5)
+        ax.plot(x,m,color=clr,label=resp)
+        ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlabel('Time from non-change flash onset (ms)')
+    ax.set_ylabel('Lick decoder confidence')
+    ax.legend()
+    ax.set_title(region)
+plt.tight_layout()
 
+flashSinceLick = np.arange(2,13)
+lickProb = []
+for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
+    if lbl not in ('VISrl',):#'SC','MRN','VISp'):
+        continue
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for f,clr in zip(flashSinceLick,plt.cm.magma(np.linspace(0,0.9,len(flashSinceLick)))):
+        d = []
+        p = []
+        for sessionId in sessionIds:
+            if len(lickDecodeData[sessionId][region]['all'])>0:
+                trials = lickDecodeData[sessionId]['flashesSinceLick']==f
+                lick = lickDecodeData[sessionId]['lick'][trials]
+                d.append([])
+                for j,_ in enumerate(decodeWindows):
+                    pred = lickDecodeData[sessionId][region][layer]['prediction'][j,trials]
+                    d[-1].append(sklearn.metrics.balanced_accuracy_score(lick,pred))
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d,axis=0)/(len(d)**0.5)
+        ax.plot(x,m,color=clr,label=f)
+        ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    # ax.set_ylim([0.45,1])
+    ax.set_xlabel('Time from non-change flash onset (ms)')
+    ax.set_ylabel('Lick decoder balanced accuracy')
+    ax.legend(loc='upper left',title='flashes since last lick',fontsize=8)
+    ax.set_title(region)
+plt.tight_layout()
 
-
+imgs = np.unique([np.unique(lickDecodeData[sessionId]['image']) for sessionId in sessionIds])
+for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
+    if lbl not in ('SC','MRN'):
+        continue
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for img,clr in zip(imgs,plt.cm.tab20(np.linspace(0,1,len(imgs)))):
+        d = []
+        for sessionId in sessionIds:
+            if len(lickDecodeData[sessionId][region]['all'])>0:
+                trials = lickDecodeData[sessionId]['image']==img
+                lick = lickDecodeData[sessionId]['lick'][trials]
+                d.append([])
+                for j,_ in enumerate(decodeWindows):
+                    pred = lickDecodeData[sessionId][region][layer]['prediction'][j,trials]
+                    d[-1].append(sklearn.metrics.balanced_accuracy_score(lick,pred))
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d,axis=0)/(len(d)**0.5)
+        ax.plot(x,m,color=clr,label=img)
+        ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlabel('Time from non-change flash onset (ms)')
+    ax.set_ylabel('Lick decoder balanced accuracy')
+    ax.legend(loc='upper left',fontsize=8)
+    ax.set_title(region)
+plt.tight_layout()
 
 
 
