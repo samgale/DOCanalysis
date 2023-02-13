@@ -45,7 +45,8 @@ windowDur = 0.75
 binSize = 0.001
 nBins = int(windowDur/binSize)
 
-h5Path = r'C:/Users/svc_ccg/Desktop/Analysis/vbnAllUnitSpikeTensor.hdf5'
+# h5Path = r'C:/Users/svc_ccg/Desktop/Analysis/vbn/vbnAllUnitSpikeTensor.hdf5'
+h5Path = r'C:/Users/svc_ccg/Desktop/Analysis/vbn/vbnAllUnitSpikeTensor_passive.hdf5'
 h5File = h5py.File(h5Path,'w')
 
 sessionCount = 0
@@ -56,7 +57,8 @@ for sessionId,sessionData in sessions.iterrows():
     session = cache.get_ecephys_session(ecephys_session_id=sessionId)
     
     stim = session.stimulus_presentations
-    flashTimes = stim.start_time[stim.active]
+    # flashTimes = stim.start_time[stim.active]
+    flashTimes = stim.start_time[stim.stimulus_block==5] # passive
     
     units = session.get_units()
     channels = session.get_channels()
@@ -85,6 +87,8 @@ stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
+
+unitDataPassive = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor_passive.hdf5'),mode='r')
 
 sessionIds = stimTable['session_id'].unique()
 # sessionIds = stimTable['session_id'][stimTable['experience_level']=='Familiar'].unique()
@@ -125,7 +129,7 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     
     return hasSpikes & hasPeakResp & (pval<0.05)
 
-    
+
 ## count responsive units
 sessionIds = stimTable['session_id'].unique()
 
@@ -166,6 +170,128 @@ pickle.dump(nUnits,open(pkl,'wb'))
 pkl = fileIO.getFile(fileType='*.pkl')
 nUnits = pickle.load(open(pkl,'rb'))
 
+
+## psth
+psthBinSize = 5
+psthEnd = 500
+psthBins = np.arange(psthBinSize,psthEnd+psthBinSize,psthBinSize)
+psth = {sessionId: {region: {layer: {state: {resp: [] for resp in ('hit','miss','false alarm','correct reject')} for state in ('active','passive')} for layer in layers} for region in regions} for sessionId in sessionIds}
+base = copy.deepcopy(psth)
+for sessionIndex,sessionId in enumerate(sessionIds):
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    spikesPassive = unitDataPassive[str(sessionId)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
+    isCatch = stim['catch']
+    isCatch[isCatch.isnull()] = False
+    isCatch = np.array(isCatch).astype(bool)
+    catchFlash = np.searchsorted(stim['start_time'],np.unique(stim['change_time_no_display_delay'][isCatch]))
+    changeTimes = np.array(stim['start_time'][changeFlash])
+    catchTimes = np.array(stim['start_time'][catchFlash])
+    hit = np.array(stim['hit'][changeFlash])
+    
+    engagedChange,engagedCatch = [np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in times]) for times in (changeTimes,catchTimes)]
+    changeFlash = changeFlash[engagedChange]
+    catchFlash = catchFlash[engagedCatch]
+    nChangeTrials = engagedChange.sum()
+    nCatchTrials = engagedCatch.sum()
+    
+    hit = hit[engagedChange]
+    falseAlarm = np.array(stim['false_alarm'][catchFlash])
+    
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+        for layer in ('all',): # layers
+            print('session '+str(sessionIndex+1)+', '+str(region)+', '+str(layer))
+            if layer=='all':
+                inLayer = inRegion
+            elif 'VIS' in region:
+                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
+            else:
+                continue
+            if not any(inLayer):
+                continue
+            sp = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(inLayer)[0]):
+                sp[i]=spikes[u,:,:]
+                
+            changeSp = sp[:,changeFlash,:]
+            preChangeSp = sp[:,changeFlash-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+            nUnits = hasResp.sum()
+            if not any(hasResp):
+                continue
+            
+            for state in ('active','passive'):
+                if state=='passive':
+                    for i,u in enumerate(np.where(inLayer)[0]):
+                        sp[i]=spikesPassive[u,:,:]
+                
+                changeSp = sp[hasResp][:,changeFlash,:psthEnd].reshape((nUnits,nChangeTrials,len(psthBins),psthBinSize)).sum(axis=-1)
+                catchSp = sp[hasResp][:,catchFlash,:psthEnd].reshape((nUnits,nCatchTrials,len(psthBins),psthBinSize)).sum(axis=-1)
+                b = sp[hasResp,:,baseWin].sum(axis=2)
+                
+                for s,flash,lick,lbls in zip((changeSp,catchSp),(changeFlash,catchFlash),(hit,falseAlarm),(('hit','miss'),('false alarm','correct reject'))):
+                    for r,lbl in zip((lick,~lick),lbls): 
+                        psth[sessionId][region][layer][state][lbl].append(np.mean(s[:,r],axis=1)/psthBinSize*1000)
+                        base[sessionId][region][layer][state][lbl].append(np.mean(b[:,flash[r]-1],axis=1)/(baseWin.stop-baseWin.start)/binSize)
+
+
+baseSubtract = True
+layer = 'all' 
+x = psthBins-psthBinSize/2
+for state in ('active','passive'):
+    fig = plt.figure(figsize=(16,8))    
+    for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
+        ax = fig.add_subplot(3,5,i+1)
+        for resp,clr in zip(('hit','miss','false alarm','correct reject'),'krgb'):
+            d = np.concatenate([psth[sessionId][region][layer][state][resp][0] for sessionId in sessionIds if len(psth[sessionId][region][layer][state][resp])>0])
+            if baseSubtract:
+                b = np.concatenate([base[sessionId][region][layer][state][resp][0] for sessionId in sessionIds if len(base[sessionId][region][layer][state][resp])>0])
+                d -= b[:,None]
+            m = np.nanmean(d,axis=0)
+            s = np.nanstd(d,axis=0)/(len(d)**0.5)
+            ax.plot(x,m,color=clr,label=resp)
+            ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlabel('Time from change/catch (ms)')
+        ax.set_ylabel('Spikes/s')
+        if i==0:
+            ax.legend()
+        ax.set_title(lbl+' (n='+str(len(d))+'), '+state)
+    plt.tight_layout()
+
+for resp in ('hit','miss','false alarm','correct reject'):    
+    fig = plt.figure(figsize=(16,8))   
+    for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
+        ax = fig.add_subplot(3,5,i+1)
+        for state,clr in zip(('active','passive'),'gm'):
+            d = np.concatenate([psth[sessionId][region][layer][state][resp][0] for sessionId in sessionIds if len(psth[sessionId][region][layer][state][resp])>0])
+            if baseSubtract:
+                b = np.concatenate([base[sessionId][region][layer][state][resp][0] for sessionId in sessionIds if len(psth[sessionId][region][layer][state][resp])>0])
+                d -= b[:,None]
+            m = np.nanmean(d,axis=0)
+            s = np.nanstd(d,axis=0)/(len(d)**0.5)
+            ax.plot(x,m,color=clr,label=state)
+            ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlabel('Time from change/catch (ms)')
+        ax.set_ylabel('Spikes/s')
+        if i==0:
+            ax.legend()
+        ax.set_title(lbl+' (n='+str(len(d))+'), '+resp)
+    plt.tight_layout()
+
+    
 
 ## adaptation
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
