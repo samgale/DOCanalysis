@@ -384,7 +384,6 @@ def pca(data,plot=False):
 # concatenate hit, miss, false alarm, correct reject before clustering
 layer = 'all'
 state = 'active'
-t = psthBins-psthBinSize/2
 psthAllUnits = {} 
 clustData = {}
 for region,lbl in zip(('MRN',('SCig','SCiw')),('MRN','SC')):
@@ -397,13 +396,41 @@ for region,lbl in zip(('MRN',('SCig','SCiw')),('MRN','SC')):
                 b = base[sessionId][region][layer][state][resp][0]
                 d.append(psth[sessionId][region][layer][state][resp][0] - b[:,None])
         psthAllUnits[lbl][resp] = np.concatenate(d)
-    clustData[lbl] = np.concatenate([psthAllUnits[lbl][resp] for resp in respLabels],axis=1)
+    clustData[lbl] = np.concatenate([psthAllUnits[lbl][resp] for resp in respLabels[:2]],axis=1)
 
-pcaData,eigVal,eigVec = pca(clustData['SC'],plot=True)
+region = 'SC'
 
-clustId,linkageMat = cluster(pcaData[:,:100],nClusters=5,plot=True,colors=None,labels='off',nreps=10)
+pcaData,eigVal,eigVec = pca(clustData[region],plot=True)
+
+nPC = np.where((np.cumsum(eigVal)/eigVal.sum())>0.9)[0][0]
+
+nClust = 5 if region=='MRN' else 2
+
+clustId,linkageMat = cluster(pcaData[:,:nPC],nClusters=nClust,plot=True,colors=None,labels='off',nreps=10)
 
 clustLabels = np.unique(clustId)
+
+
+fig = plt.figure(figsize=(6,nClust*2))
+x = psthBins-psthBinSize/2
+for i,clust in enumerate(clustLabels):
+    ax = fig.add_subplot(nClust,1,i+1)
+    inClust = clustId == clust
+    for resp,clr in zip(respLabels,'krgb'):
+        m = psthAllUnits[region][resp][inClust].mean(axis=0)
+        s = psthAllUnits[region][resp][inClust].std(axis=0)/(inClust.sum()**0.5)
+        ax.plot(x,m,color=clr,label=resp)
+        ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    if i==clustLabels.size-1:
+        ax.set_xlabel('Time from change/catch (ms)')
+    ax.set_ylabel('Spikes/s')
+    if i==0:
+        ax.legend(loc='upper right')
+    ax.set_title(region+', cluster '+str(clust)+' ,n='+str(inClust.sum()))
+plt.tight_layout()
 
  
 
