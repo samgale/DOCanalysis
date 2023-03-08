@@ -12,6 +12,7 @@ import pickle
 import warnings
 import numpy as np
 import scipy.stats
+import scipy.cluster
 import pandas as pd
 import h5py
 import matplotlib
@@ -172,10 +173,11 @@ nUnits = pickle.load(open(pkl,'rb'))
 
 
 ## psth
+respLabels = ('hit','miss','false alarm','correct reject')
 psthBinSize = 5
 psthEnd = 500
 psthBins = np.arange(psthBinSize,psthEnd+psthBinSize,psthBinSize)
-psth = {sessionId: {region: {layer: {state: {resp: [] for resp in ('hit','miss','false alarm','correct reject')} for state in ('active','passive')} for layer in layers} for region in regions} for sessionId in sessionIds}
+psth = {sessionId: {region: {layer: {state: {resp: [] for resp in respLabels} for state in ('active','passive')} for layer in layers} for region in regions} for sessionId in sessionIds}
 base = copy.deepcopy(psth)
 for sessionIndex,sessionId in enumerate(sessionIds):
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -203,6 +205,8 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     falseAlarm = np.array(stim['false_alarm'][catchFlash])
     
     for region in regions:
+        if not (region=='MRN' or 'SCig' in region):
+            continue
         inRegion = np.in1d(units['structure_acronym'],region)
         if not any(inRegion):
             continue
@@ -249,7 +253,7 @@ for state in ('active','passive'):
     fig = plt.figure(figsize=(16,8))    
     for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
         ax = fig.add_subplot(3,5,i+1)
-        for resp,clr in zip(('hit','miss','false alarm','correct reject'),'krgb'):
+        for resp,clr in zip(respLabels,'krgb'):
             d = np.concatenate([psth[sessionId][region][layer][state][resp][0] for sessionId in sessionIds if len(psth[sessionId][region][layer][state][resp])>0])
             if baseSubtract:
                 b = np.concatenate([base[sessionId][region][layer][state][resp][0] for sessionId in sessionIds if len(base[sessionId][region][layer][state][resp])>0])
@@ -268,7 +272,7 @@ for state in ('active','passive'):
         ax.set_title(lbl+' (n='+str(len(d))+'), '+state)
     plt.tight_layout()
 
-for resp in ('hit','miss','false alarm','correct reject'):    
+for resp in respLabels:    
     fig = plt.figure(figsize=(16,8))   
     for i,(region,lbl) in enumerate(zip(regions,regionLabels)):
         ax = fig.add_subplot(3,5,i+1)
@@ -290,8 +294,118 @@ for resp in ('hit','miss','false alarm','correct reject'):
             ax.legend()
         ax.set_title(lbl+' (n='+str(len(d))+'), '+resp)
     plt.tight_layout()
-
     
+    
+# cluster units by psth
+
+def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colors=None,nreps=1000,labels=None):
+    # data is n samples x m parameters
+    linkageMat = scipy.cluster.hierarchy.linkage(data,method=method,metric=metric)
+    if nClusters is None:
+        clustId = None
+    else:
+        clustId = scipy.cluster.hierarchy.fcluster(linkageMat,nClusters,'maxclust')
+    if plot:
+        plt.figure(facecolor='w')
+        ax = plt.subplot(1,1,1)
+        colorThresh = 0 if nClusters<2 else linkageMat[::-1,2][nClusters-2]
+        if colors is not None:
+            scipy.cluster.hierarchy.set_link_color_palette(list(colors))
+        if labels=='off':
+            labels=None
+            noLabels=True
+        else:
+            noLabels=False
+        scipy.cluster.hierarchy.dendrogram(linkageMat,ax=ax,color_threshold=colorThresh,above_threshold_color='k',labels=labels,no_labels=noLabels)
+        scipy.cluster.hierarchy.set_link_color_palette(None)
+        ax.set_yticks([])
+        for side in ('right','top','left','bottom'):
+            ax.spines[side].set_visible(False)
+        plt.tight_layout()
+        
+        if nreps>0:
+            randLinkage = np.zeros((nreps,linkageMat.shape[0]))
+            shuffledData = data.copy()
+            for i in range(nreps):
+                for j in range(data.shape[1]):
+                    shuffledData[:,j] = data[np.random.permutation(data.shape[0]),j]
+                _,m = cluster(shuffledData,method=method,metric=metric)
+                randLinkage[i] = m[::-1,2]
+            
+            plt.figure(facecolor='w')
+            ax = plt.subplot(1,1,1)
+            k = np.arange(linkageMat.shape[0])+2
+            ax.plot(k,np.percentile(randLinkage,2.5,axis=0),'k--')
+            ax.plot(k,np.percentile(randLinkage,97.5,axis=0),'k--')
+            ax.plot(k,linkageMat[::-1,2],'ko-',mfc='none',ms=10,mew=2,linewidth=2)
+            ax.set_xlim([0,k[-1]+1])
+            ax.set_xlabel('Cluster')
+            ax.set_ylabel('Linkage Distance')
+            for side in ('right','top'):
+                ax.spines[side].set_visible(False)
+            ax.tick_params(direction='out',top=False,right=False)
+            plt.tight_layout()
+    
+    return clustId,linkageMat
+
+def pca(data,plot=False):
+    # data is n samples x m parameters
+    eigVal,eigVec = np.linalg.eigh(np.cov(data,rowvar=False))
+    order = np.argsort(eigVal)[::-1]
+    eigVal = eigVal[order]
+    eigVec = eigVec[:,order]
+    pcaData = data.dot(eigVec)
+    if plot:
+        fig = plt.figure(facecolor='w')
+        ax = fig.add_subplot(1,1,1)
+        ax.plot(np.arange(1,eigVal.size+1),eigVal.cumsum()/eigVal.sum(),'k')
+        ax.set_xlim((0.5,eigVal.size+0.5))
+        ax.set_ylim((0,1.02))
+        ax.set_xlabel('PC')
+        ax.set_ylabel('Cumulative Fraction of Variance')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        
+        fig = plt.figure(facecolor='w')
+        ax = fig.add_subplot(1,1,1)
+        im = ax.imshow(eigVec,clim=(-1,1),cmap='bwr',interpolation='none',origin='lower')
+        ax.set_xlabel('PC')
+        ax.set_ylabel('Parameter')
+        ax.set_title('PC Weightings')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+        cb.ax.tick_params(length=0)
+        cb.set_ticks([-1,0,1])
+    return pcaData,eigVal,eigVec
+
+# concatenate hit, miss, false alarm, correct reject before clustering
+layer = 'all'
+state = 'active'
+t = psthBins-psthBinSize/2
+psthAllUnits = {} 
+clustData = {}
+for region,lbl in zip(('MRN',('SCig','SCiw')),('MRN','SC')):
+    psthAllUnits[lbl] = {}
+    for resp in respLabels:
+        d = []
+        for sessionId in sessionIds:
+            if (all(len(psth[sessionId][region][layer][state][resp])>0 and
+                not np.all(np.isnan(psth[sessionId][region][layer][state][resp]))for resp in respLabels)):
+                b = base[sessionId][region][layer][state][resp][0]
+                d.append(psth[sessionId][region][layer][state][resp][0] - b[:,None])
+        psthAllUnits[lbl][resp] = np.concatenate(d)
+    clustData[lbl] = np.concatenate([psthAllUnits[lbl][resp] for resp in respLabels],axis=1)
+
+pcaData,eigVal,eigVec = pca(clustData['SC'],plot=True)
+
+clustId,linkageMat = cluster(pcaData[:,:100],nClusters=5,plot=True,colors=None,labels='off',nreps=10)
+
+clustLabels = np.unique(clustId)
+
+ 
 
 ## adaptation
 changeSpikes = {region: {layer: [] for layer in layers} for region in regions}
