@@ -205,8 +205,6 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     falseAlarm = np.array(stim['false_alarm'][catchFlash])
     
     for region in regions:
-        if not (region=='MRN' or 'SCig' in region):
-            continue
         inRegion = np.in1d(units['structure_acronym'],region)
         if not any(inRegion):
             continue
@@ -404,7 +402,16 @@ pcaData,eigVal,eigVec = pca(clustData[region],plot=True)
 
 nPC = np.where((np.cumsum(eigVal)/eigVal.sum())>0.9)[0][0]
 
-nClust = 5 if region=='MRN' else 2
+clustData = pcaData[:,:nPC]
+
+clustScores = np.zeros((3,9))
+for i,n in enumerate(range(2,11)):
+    cid = cluster(clustData,nClusters=n,plot=False)[0]
+    clustScores[0,i] = sklearn.metrics.silhouette_score(pcaData[:,:nPC],cid)
+    clustScores[1,i] = sklearn.metrics.calinski_harabasz_score(pcaData[:,:nPC],cid)
+    clustScores[2,i] = sklearn.metrics.davies_bouldin_score(pcaData[:,:nPC],cid)
+    
+nClust = 2 + int(np.median(np.concatenate((np.argmax(clustScores[:2],axis=1),[np.argmin(clustScores[2])]))))
 
 clustId,linkageMat = cluster(pcaData[:,:nPC],nClusters=nClust,plot=True,colors=None,labels='off',nreps=10)
 
