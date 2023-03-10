@@ -296,7 +296,7 @@ for resp in respLabels:
     
 # cluster units by psth
 
-def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colors=None,nreps=1000,labels=None):
+def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colors=None,labels=None,xmax=None,nreps=1000,title=None):
     # data is n samples x m parameters
     linkageMat = scipy.cluster.hierarchy.linkage(data,method=method,metric=metric)
     if nClusters is None:
@@ -319,8 +319,13 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
         ax.set_yticks([])
         for side in ('right','top','left','bottom'):
             ax.spines[side].set_visible(False)
+        if title is not None:
+            ax.set_title(title)
         plt.tight_layout()
-        
+            
+        plt.figure(facecolor='w')
+        ax = plt.subplot(1,1,1)
+        k = np.arange(linkageMat.shape[0])+2
         if nreps>0:
             randLinkage = np.zeros((nreps,linkageMat.shape[0]))
             shuffledData = data.copy()
@@ -329,20 +334,21 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
                     shuffledData[:,j] = data[np.random.permutation(data.shape[0]),j]
                 _,m = cluster(shuffledData,method=method,metric=metric)
                 randLinkage[i] = m[::-1,2]
-            
-            plt.figure(facecolor='w')
-            ax = plt.subplot(1,1,1)
-            k = np.arange(linkageMat.shape[0])+2
             ax.plot(k,np.percentile(randLinkage,2.5,axis=0),'k--')
             ax.plot(k,np.percentile(randLinkage,97.5,axis=0),'k--')
-            ax.plot(k,linkageMat[::-1,2],'ko-',mfc='none',ms=10,mew=2,linewidth=2)
+        ax.plot(k,linkageMat[::-1,2],'ko-',mfc='none',ms=10,mew=2,linewidth=2)
+        if xmax is None:
             ax.set_xlim([0,k[-1]+1])
-            ax.set_xlabel('Cluster')
-            ax.set_ylabel('Linkage Distance')
-            for side in ('right','top'):
-                ax.spines[side].set_visible(False)
-            ax.tick_params(direction='out',top=False,right=False)
-            plt.tight_layout()
+        else:
+            ax.set_xlim([0,xmax])
+        ax.set_xlabel('Cluster')
+        ax.set_ylabel('Linkage Distance')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        if title is not None:
+            ax.set_title(title)
+        plt.tight_layout()
     
     return clustId,linkageMat
 
@@ -379,13 +385,13 @@ def pca(data,plot=False):
         cb.set_ticks([-1,0,1])
     return pcaData,eigVal,eigVec
 
-# concatenate hit, miss, false alarm, correct reject before clustering
+
 layer = 'all'
 state = 'active'
-psthAllUnits = {} 
-clustData = {}
-for region,lbl in zip(('MRN',('SCig','SCiw')),('MRN','SC')):
-    psthAllUnits[lbl] = {}
+x = psthBins-psthBinSize/2
+psthAllUnits = {region: {} for region in regions} 
+nClusters = [2,2,2,2,2,2,2,2,2,3,2,2,2,2,2]
+for region,lbl,nClust in zip(regions,regionLabels,nClusters):
     for resp in respLabels:
         d = []
         for sessionId in sessionIds:
@@ -393,51 +399,43 @@ for region,lbl in zip(('MRN',('SCig','SCiw')),('MRN','SC')):
                 not np.all(np.isnan(psth[sessionId][region][layer][state][resp]))for resp in respLabels)):
                 b = base[sessionId][region][layer][state][resp][0]
                 d.append(psth[sessionId][region][layer][state][resp][0] - b[:,None])
-        psthAllUnits[lbl][resp] = np.concatenate(d)
-    clustData[lbl] = np.concatenate([psthAllUnits[lbl][resp] for resp in respLabels[:2]],axis=1)
+        psthAllUnits[region][resp] = np.concatenate(d)
+    clustData = np.concatenate([psthAllUnits[region][resp] for resp in respLabels[:2]],axis=1)
 
-region = 'SC'
-
-pcaData,eigVal,eigVec = pca(clustData[region],plot=True)
-
-nPC = np.where((np.cumsum(eigVal)/eigVal.sum())>0.9)[0][0]
-
-clustData = pcaData[:,:nPC]
-
-clustScores = np.zeros((3,9))
-for i,n in enumerate(range(2,11)):
-    cid = cluster(clustData,nClusters=n,plot=False)[0]
-    clustScores[0,i] = sklearn.metrics.silhouette_score(pcaData[:,:nPC],cid)
-    clustScores[1,i] = sklearn.metrics.calinski_harabasz_score(pcaData[:,:nPC],cid)
-    clustScores[2,i] = sklearn.metrics.davies_bouldin_score(pcaData[:,:nPC],cid)
+    pcaData,eigVal,eigVec = pca(clustData,plot=False)
+    nPC = np.where((np.cumsum(eigVal)/eigVal.sum())>0.9)[0][0]
+    clustData = pcaData[:,:nPC]
     
-nClust = 2 + int(np.median(np.concatenate((np.argmax(clustScores[:2],axis=1),[np.argmin(clustScores[2])]))))
+    # clustScores = np.zeros((3,9))
+    # for i,n in enumerate(range(2,11)):
+    #     cid = cluster(clustData,nClusters=n,plot=False)[0]
+    #     clustScores[0,i] = sklearn.metrics.silhouette_score(clustData,cid)
+    #     clustScores[1,i] = sklearn.metrics.calinski_harabasz_score(clustData,cid)
+    #     clustScores[2,i] = sklearn.metrics.davies_bouldin_score(clustData,cid)
+    # nClust = 2 + int(np.median(np.concatenate((np.argmax(clustScores[:2],axis=1),[np.argmin(clustScores[2])]))))
 
-clustId,linkageMat = cluster(pcaData[:,:nPC],nClusters=nClust,plot=True,colors=None,labels='off',nreps=10)
+    clustId,linkageMat = cluster(clustData,nClusters=nClust,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=lbl)
+    clustLabels = np.unique(clustId)
 
-clustLabels = np.unique(clustId)
-
-
-fig = plt.figure(figsize=(6,nClust*2))
-x = psthBins-psthBinSize/2
-for i,clust in enumerate(clustLabels):
-    ax = fig.add_subplot(nClust,1,i+1)
-    inClust = clustId == clust
-    for resp,clr in zip(respLabels,'krgb'):
-        m = psthAllUnits[region][resp][inClust].mean(axis=0)
-        s = psthAllUnits[region][resp][inClust].std(axis=0)/(inClust.sum()**0.5)
-        ax.plot(x,m,color=clr,label=resp)
-        ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    if i==clustLabels.size-1:
-        ax.set_xlabel('Time from change/catch (ms)')
-    ax.set_ylabel('Spikes/s')
-    if i==0:
-        ax.legend(loc='upper right')
-    ax.set_title(region+', cluster '+str(clust)+' ,n='+str(inClust.sum()))
-plt.tight_layout()
+    fig = plt.figure(figsize=(6,nClust*2))
+    for i,clust in enumerate(clustLabels):
+        ax = fig.add_subplot(nClust,1,i+1)
+        inClust = clustId == clust
+        for resp,clr in zip(respLabels,'krgb'):
+            m = psthAllUnits[region][resp][inClust].mean(axis=0)
+            s = psthAllUnits[region][resp][inClust].std(axis=0)/(inClust.sum()**0.5)
+            ax.plot(x,m,color=clr,label=resp)
+            ax.fill_between(x,m+s,m-s,color=clr,alpha=0.25)
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        if i==clustLabels.size-1:
+            ax.set_xlabel('Time from change/catch (ms)')
+        ax.set_ylabel('Spikes/s')
+        if i==0:
+            ax.legend(loc='upper right')
+        ax.set_title(lbl+', cluster '+str(clust)+' ,n='+str(inClust.sum()))
+    plt.tight_layout()
 
  
 
