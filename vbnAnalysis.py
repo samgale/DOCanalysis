@@ -294,6 +294,70 @@ for resp in respLabels:
     plt.tight_layout()
     
     
+# single neuron change/lick decoding
+
+decodeWindowSize = 10
+decodeWindowEnd = 500 # respWin.stop
+decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
+
+changeAuc = {sessionId: {region: [] for region in regions} for sessionId in sessionIds}
+respAuc = {sessionId: {region: [] for region in regions} for sessionId in sessionIds}
+lickAuc = {sessionId: {region: [] for region in regions} for sessionId in sessionIds}
+
+for sessionIndex,sessionId in enumerate(sessionIds):
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    changeFlash = np.where(stim['is_change'] & ~autoRewarded)[0]
+    changeTimes = np.array(stim['start_time'][changeFlash])
+    flashTimes = np.array(stim['start_time'])
+    hit = np.array(stim['hit'][changeFlash])
+    
+    engagedChange,engagedFlash = [np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in times]) for times in (changeTimes,flashTimes)]
+    changeFlash = changeFlash[engagedChange]
+    hit = hit[engagedChange]
+
+    nonChangeFlashes = np.array(engagedFlash &
+                                (~stim['is_change']) & 
+                                (~stim['omitted']) & 
+                                (~stim['previous_omitted']) & 
+                                (stim['flashes_since_change']>5) &
+                                (stim['flashes_since_last_lick']>1))
+    lick = np.array(stim['lick_for_flash'])[nonChangeFlashes]
+    
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+        print('session '+str(sessionIndex+1)+', '+str(region))
+    
+        sp = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(inLayer)[0]):
+            sp[i] = spikes[u]
+            
+        changeSp = sp[:,changeFlash]
+        preChangeSp = sp[:,changeFlash-1]
+        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        if not any(hasResp):
+            continue
+        nonChangeSp = sp[:,nonChangeFlashes]
+        
+        changeAuc[sessionId][region] = np.full((hasResp.sum(),len(decodeWindows)),np.nan)
+        respAuc[sessionId][region] = np.full((hasResp.sum(),len(decodeWindows)),np.nan)
+        lickAuc[sessionId][region] = np.full((hasResp.sum(),len(decodeWindows)),np.nan)
+        for i,u in enumerate(np.where(hasResp)[0]):
+            for j,winEnd in enumerate(decodeWindows):
+                for auc,a,b in zip((changeAuc,respAuc,lickAuc),(changeSp,changeSp[:,hit],nonChangeSp[:,lick]),(preChangeSp,changeSp[:,~hit],nonChangeSp[:,~lick])):
+                    x,y = [z[u,:,:winEnd].sum(axis=-1) for z in (a,b)] 
+                    if x.size >0 and y.size > 0:
+                        c = np.zeros((x.size,y.size)) + 0.5
+                        c[x[:,None] > y[None,:]] = 1
+                        c[x[:,None] < y[None,:]] = 0
+                        auc[sessionId][region][i,j] = c.sum() / c.size
+
+    
 # cluster units by psth
 
 def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colors=None,labels=None,xmax=None,nreps=1000,title=None):
@@ -390,9 +454,8 @@ layer = 'all'
 state = 'active'
 x = psthBins-psthBinSize/2
 psthAllUnits = {region: {} for region in regions} 
-nClusters = [2,2,2,2,2,2,2,2,2,3,2,2,2,2,2]
-for region,lbl,nClust in zip(regions,regionLabels,nClusters):
-    for resp in respLabels:
+for region,lbl in zip(regions,regionLabels):
+    for resp in respLabels[:2]:
         d = []
         for sessionId in sessionIds:
             if (all(len(psth[sessionId][region][layer][state][resp])>0 and
@@ -401,20 +464,25 @@ for region,lbl,nClust in zip(regions,regionLabels,nClusters):
                 d.append(psth[sessionId][region][layer][state][resp][0] - b[:,None])
         psthAllUnits[region][resp] = np.concatenate(d)
     clustData = np.concatenate([psthAllUnits[region][resp] for resp in respLabels[:2]],axis=1)
+    clustData /= clustData.max(axis=1)[:,None]
 
-    pcaData,eigVal,eigVec = pca(clustData,plot=False)
-    nPC = np.where((np.cumsum(eigVal)/eigVal.sum())>0.9)[0][0]
-    clustData = pcaData[:,:nPC]
+    # pcaData,eigVal,eigVec = pca(clustData,plot=False)
+    # nPC = np.where((np.cumsum(eigVal)/eigVal.sum())>0.9)[0][0]
+    # pcaClustData = pcaData[:,:nPC]
     
-    # clustScores = np.zeros((3,9))
-    # for i,n in enumerate(range(2,11)):
+    pcaClustData = clustData
+    
+    # minClust = 2
+    # maxClust = 6
+    # clustScores = np.zeros((3,maxClust))
+    # for i,n in enumerate(range(minClust,maxClust+1)):
     #     cid = cluster(clustData,nClusters=n,plot=False)[0]
-    #     clustScores[0,i] = sklearn.metrics.silhouette_score(clustData,cid)
-    #     clustScores[1,i] = sklearn.metrics.calinski_harabasz_score(clustData,cid)
-    #     clustScores[2,i] = sklearn.metrics.davies_bouldin_score(clustData,cid)
-    # nClust = 2 + int(np.median(np.concatenate((np.argmax(clustScores[:2],axis=1),[np.argmin(clustScores[2])]))))
-
-    clustId,linkageMat = cluster(clustData,nClusters=nClust,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=lbl)
+    #     clustScores[0,i] = sklearn.metrics.silhouette_score(pcaClustData,cid)
+    #     clustScores[1,i] = sklearn.metrics.calinski_harabasz_score(pcaClustData,cid)
+    #     clustScores[2,i] = sklearn.metrics.davies_bouldin_score(pcaClustData,cid)
+    # nClust = minClust + int(np.median(np.concatenate((np.argmax(clustScores[:2],axis=1),[np.argmin(clustScores[2])]))))
+    nClust=2
+    clustId,linkageMat = cluster(pcaClustData,nClusters=nClust,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=lbl)
     clustLabels = np.unique(clustId)
 
     fig = plt.figure(figsize=(6,nClust*2))
@@ -436,7 +504,24 @@ for region,lbl,nClust in zip(regions,regionLabels,nClusters):
             ax.legend(loc='upper right')
         ax.set_title(lbl+', cluster '+str(clust)+' ,n='+str(inClust.sum()))
     plt.tight_layout()
-
+    
+    fig = plt.figure(figsize=(6,nClust*2))
+    for i,clust in enumerate(clustLabels):
+        ax = fig.add_subplot(nClust,1,i+1)
+        inClust = clustId == clust
+        d = clustData[inClust]
+        sortInd = np.argsort(np.argmax(d[:,:int(d.shape[1]/2)],axis=1))
+        im = ax.imshow(d[sortInd],clim=(-0.1,1),cmap=plt.cm.magma,aspect='auto')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xticks(np.arange(0,d.shape[1],int(100/psthBinSize)))
+        ax.set_xticklabels([0,100,200,300,400]*2)
+        if i==clustLabels.size-1:
+            ax.set_xlabel('Time from change (ms), hit/miss')
+        ax.set_ylabel('Unit')
+        ax.set_title(lbl+', cluster '+str(clust)+' ,n='+str(inClust.sum()))
+    plt.tight_layout()
  
 
 ## adaptation
@@ -677,7 +762,7 @@ for r,ylbl in zip((flashResp,flashBase,changeFlashResp,changeFlashBase),('flash 
     plt.tight_layout()
 
 
-## change/lick decoding
+## change/lick population decoding
 def crossValidate(model,X,y,nSplits):
     # cross validation using stratified shuffle split
     # each split preserves the percentage of samples of each class

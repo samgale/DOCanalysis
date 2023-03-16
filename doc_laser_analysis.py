@@ -119,10 +119,9 @@ class DocLaser():
             if 'actual_laser_frame' in laserTrial:
                 i = laserTrial['trial']
                 self.laserOnFrame[i] = laserTrial['actual_laser_frame']
-                if 'laser' in laserTrial:
-                    if 'amp' in laserTrial:
-                        amp = laserTrial['amp']
-                        self.laserAmp[i] = amp
+                if 'amp' in laserTrial:
+                    amp = laserTrial['amp']
+                    self.laserAmp[i] = amp
                 if 'actual_change_frame' in laserTrial:
                     laserOffset = laserTrial['actual_laser_frame']-laserTrial['actual_change_frame']
                     if laserOffset in expectedLaserOffsets:
