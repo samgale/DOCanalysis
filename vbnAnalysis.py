@@ -363,7 +363,7 @@ for i,auc in enumerate((changeAuc,respAuc,lickAuc)):
     ax = fig.add_subplot(4,1,i+1)
     for region,clr in zip(regions,regionColors):
         lyr = layer if 'VIS' in region else layers[0]
-        d = [auc[sessionId][region] for sessionId in sessionIds if len(auc[sessionId][region])>0]
+        d = np.concatenate([auc[sessionId][region] for sessionId in sessionIds if len(auc[sessionId][region])>0])
         if len(d)>0:
             m = np.nanmean(d,axis=0)
             s = np.nanstd(d,axis=0)/(len(d)**0.5)
@@ -371,30 +371,29 @@ for i,auc in enumerate((changeAuc,respAuc,lickAuc)):
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    ax.set_ylim([0.4,1])
+    # ax.set_ylim([0.4,1])
     ax.set_xlabel('Time from change (ms)')
     ax.set_ylabel('Decoding accuracy (auROC)')
-ax = fig.add_subplot(4,1,3)
-for lbl,clr in zip(regionLabels,regionColors):
-    ax.plot([],color=clr,label=lbl)
-for side in ('right','top','left','bottom'):
-    ax.spines[side].set_visible(False)
-ax.set_xticks([])
-ax.set_yticks([])
-ax.legend(loc='center',fontsize=8)
+# ax = fig.add_subplot(4,1,3)
+# for lbl,clr in zip(regionLabels,regionColors):
+#     ax.plot([],color=clr,label=lbl)
+# for side in ('right','top','left','bottom'):
+#     ax.spines[side].set_visible(False)
+# ax.set_xticks([])
+# ax.set_yticks([])
+# ax.legend(loc='center',fontsize=8)
 plt.tight_layout()
 
-fig = plt.figure(figsize=(12,8))
+fig = plt.figure()
 xticks = np.arange(len(regions))
-for i,layer in enumerate(layers):
-    ax = fig.add_subplot(3,2,i+1)
+for i,auc in enumerate((changeAuc,respAuc,lickAuc)):
+    ax = fig.add_subplot(3,1,i+1)
     for x,region in enumerate(regions):
-        lyr = layer if 'VIS' in region else layers[0]
         for winEnd,mfc in zip((100,200),('k','none')):
             j = np.where(decodeWindows==winEnd)[0][0]
-            d = [decodeData[sessionId][region][lyr][sampleSize]['changeAccuracy'][j] for sessionId in sessionIds if len(decodeData[sessionId][region][lyr][sampleSize])>0]
-            m = np.mean(d)
-            s = np.std(d)/(len(d)**0.5)
+            d = np.concatenate([auc[sessionId][region][:,j] for sessionId in sessionIds if len(auc[sessionId][region])>0])
+            m = np.nanmean(d)
+            s = np.nanstd(d)/(len(d)**0.5)
             lbl = str(winEnd)+' ms' if region=='VISp' else None
             ax.plot(x,m,'ko',mfc=mfc,label=lbl)
             ax.plot([x,x],[m-s,m+s],'k')
@@ -403,12 +402,31 @@ for i,layer in enumerate(layers):
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xticks(xticks)
     ax.set_xticklabels(regionLabels)
-    ax.set_ylim([0.5,1])
-    ax.set_ylabel('Change decoding accuracy')
-    ax.set_title('cortical layer '+str(layer))
+    # ax.set_ylim([0.5,1])
+    ax.set_ylabel('Decoding accuracy (auROC)')
     if i==0:
         ax.legend(loc='upper left')
 plt.tight_layout()
+
+fig = plt.figure(figsize=(10,8))
+for i,auc in enumerate((changeAuc,respAuc,lickAuc)):
+    ax = fig.add_subplot(3,1,i+1)
+    for region,clr in zip(regions,regionColors):
+        j = np.where(decodeWindows==200)[0][0]
+        d = np.concatenate([auc[sessionId][region][:,j] for sessionId in sessionIds if len(auc[sessionId][region])>0])
+        if len(d)>0:
+            d = d[~np.isnan(d)]
+            dsort = np.sort(d)
+            cumProb = np.array([np.sum(d<=i)/d.size for i in dsort])
+            ax.plot(dsort,cumProb,color=clr)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    # ax.set_ylim([0.4,1])
+    ax.set_xlabel('Decoding accuracy (auROC)')
+    ax.set_ylabel('Cumulative prob.')
+plt.tight_layout()
+
 
     
 # cluster units by psth
