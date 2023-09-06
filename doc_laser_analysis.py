@@ -32,10 +32,8 @@ class DocLaser():
             flashInterval = flashDur + grayDur
         
         self.frameRate = 60
-        self.laserMonitorLag = self.params['laser_params']['monitor_lag']
         
         trialLog = pkl['items']['behavior']['trial_log']
-        laserLog = pkl['items']['behavior']['laser_trials']
 #        changeLog = pkl['items']['behavior']['stimuli']['images']['change_log']
         
         ntrials = len(trialLog)
@@ -98,27 +96,30 @@ class DocLaser():
             if len(trial['rewards']) > 0:
                 self.rewardTimes[i] = trial['rewards'][0][1]
                 self.autoReward[i] = trial['trial_params']['auto_reward']
-                
+        
+        self.laserMonitorLag = self.params['laser_params']['monitor_lag'] if 'laser_params' in self.params else 0
         self.laserAmp = np.full(len(trialLog),np.nan)
         self.laserFlashOffset = np.full(len(trialLog),np.nan)
         self.laserFrameOffset = np.full(len(trialLog),np.nan)
         self.laserOnFrame = np.full(len(trialLog),np.nan)
         self.laserOnBeforeAbort = np.zeros(len(trialLog),dtype=bool)
-        expectedLaserOffsets = [int(x[0]*flashInterval*self.frameRate+x[1]+self.laserMonitorLag) for x in self.params['laser_params']['offset']]
-        for laserTrial in laserLog:
-            if 'actual_laser_frame' in laserTrial:
-                i = laserTrial['trial']
-                self.laserOnFrame[i] = laserTrial['actual_laser_frame']
-                if 'amp' in laserTrial:
-                    amp = laserTrial['amp']
-                    self.laserAmp[i] = amp
-                if 'actual_change_frame' in laserTrial:
-                    laserOffset = laserTrial['actual_laser_frame']-laserTrial['actual_change_frame']
-                    if laserOffset in expectedLaserOffsets:
-                        self.laserFrameOffset[i] = laserOffset
-                        self.laserFlashOffset[i] = laserTrial['actual_laser_flash']-laserTrial['actual_change_flash']
-                else:
-                    self.laserOnBeforeAbort[i] = True
+        if 'laser_trials' in pkl['items']['behavior']:
+            laserLog = pkl['items']['behavior']['laser_trials']
+            expectedLaserOffsets = [int(x[0]*flashInterval*self.frameRate+x[1]+self.laserMonitorLag) for x in self.params['laser_params']['offset']]
+            for laserTrial in laserLog:
+                if 'actual_laser_frame' in laserTrial:
+                    i = laserTrial['trial']
+                    self.laserOnFrame[i] = laserTrial['actual_laser_frame']
+                    if 'amp' in laserTrial:
+                        amp = laserTrial['amp']
+                        self.laserAmp[i] = amp
+                    if 'actual_change_frame' in laserTrial:
+                        laserOffset = laserTrial['actual_laser_frame']-laserTrial['actual_change_frame']
+                        if laserOffset in expectedLaserOffsets:
+                            self.laserFrameOffset[i] = laserOffset
+                            self.laserFlashOffset[i] = laserTrial['actual_laser_flash']-laserTrial['actual_change_flash']
+                    else:
+                        self.laserOnBeforeAbort[i] = True
                     
         outcomeTimes = np.zeros(len(trialLog))
         outcomeTimes[self.abortedTrials] = self.abortTimes[self.abortedTrials]
@@ -278,7 +279,7 @@ def plotLicks(obj,preTime=1.5,postTime=0.75):
         offsetTrials = np.isnan(obj.laserFrameOffset) if np.isnan(offset) else obj.laserFrameOffset==offset
         for i,(trialType,lbl) in enumerate(zip((obj.changeTrials,obj.catchTrials),('change','catch'))):
             ax = fig.add_subplot(2,1,i+1)
-            for n,ct in enumerate(obj.changeTimes[trialType & obj.engaged & offsetTrials]):
+            for n,ct in enumerate(obj.changeTimes[trialType & offsetTrials]):
                 licks = obj.lickTimes[(obj.lickTimes>ct-preTime) & (obj.lickTimes<ct+postTime)]-ct
                 ax.vlines(licks,n-0.5,n+0.5,colors='k')
             for side in ('right','top'):
