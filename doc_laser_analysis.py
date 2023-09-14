@@ -120,6 +120,7 @@ class DocLaser():
                             self.laserFlashOffset[i] = laserTrial['actual_laser_flash']-laserTrial['actual_change_flash']
                     else:
                         self.laserOnBeforeAbort[i] = True
+            self.laserFrameOffset = self.laserOnFrame - self.changeFrames
                     
         outcomeTimes = np.zeros(len(trialLog))
         outcomeTimes[self.abortedTrials] = self.abortTimes[self.abortedTrials]
