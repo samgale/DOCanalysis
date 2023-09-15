@@ -104,20 +104,26 @@ class DocLaser():
         self.laserOnFrame = np.full(len(trialLog),np.nan)
         self.laserOnBeforeAbort = np.zeros(len(trialLog),dtype=bool)
         if 'laser_trials' in pkl['items']['behavior']:
-            laserLog = pkl['items']['behavior']['laser_trials']
+            laser = 'laser'
+        elif 'layzer_trials' in pkl['items']['behavior']:
+            laser = 'layzer'
+        else:
+            laser = None
+        if laser is not None:
+            laserLog = pkl['items']['behavior'][laser+'_trials']
             expectedLaserOffsets = [int(x[0]*flashInterval*self.frameRate+x[1]+self.laserMonitorLag) for x in self.params['laser_params']['offset']]
             for laserTrial in laserLog:
-                if 'actual_laser_frame' in laserTrial:
+                if 'actual_'+laser+'_frame' in laserTrial:
                     i = laserTrial['trial']
-                    self.laserOnFrame[i] = laserTrial['actual_laser_frame']
+                    self.laserOnFrame[i] = laserTrial['actual_'+laser+'_frame']
                     if 'amp' in laserTrial:
                         amp = laserTrial['amp']
                         self.laserAmp[i] = amp
                     if 'actual_change_frame' in laserTrial:
-                        laserOffset = laserTrial['actual_laser_frame']-laserTrial['actual_change_frame']
+                        laserOffset = laserTrial['actual_'+laser+'_frame']-laserTrial['actual_change_frame']
                         if laserOffset in expectedLaserOffsets:
                             self.laserFrameOffset[i] = laserOffset
-                            self.laserFlashOffset[i] = laserTrial['actual_laser_flash']-laserTrial['actual_change_flash']
+                            self.laserFlashOffset[i] = laserTrial['actual_'+laser+'_flash']-laserTrial['actual_change_flash']
                     else:
                         self.laserOnBeforeAbort[i] = True
             self.laserFrameOffset = self.laserOnFrame - self.changeFrames

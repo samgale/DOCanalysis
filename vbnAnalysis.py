@@ -77,6 +77,31 @@ for sessionId,sessionData in sessions.iterrows():
         i += 1
 
 h5File.close()
+
+
+## make hdf5 with dlc output
+baseDir = r"C:\Users\svc_ccg\Desktop\Analysis\vbn"
+videoTable = pd.read_excel(os.path.join(baseDir,'vbn_video_paths_full_validation.xlsx'))
+videoTable.insert(0,'session_id',[int(s[:s.find('_')]) for s in videoTable['exp_id']])
+
+h5Path = os.path.joion(baseDir,'vbnDLCdata.hdf5')
+h5File = h5py.File(h5Path,'w')
+
+for sessionIndex,sessionId in enumerate(videoTable['session_id']):
+    print(sessionIndex)
+    sessionGroup = h5File.create_group(str(sessionId))
+    for videoType in ('side','face','eye'):
+        videoGroup = sessionGroup.create_group(videoType)
+        i = np.where(videoTable['session_id'] == sessionId)[0][0] 
+        dlcPath = videoTable.loc[i,videoType+'_dlc_output']
+        dlc = pd.read_hdf(dlcPath).droplevel('scorer',axis='columns')
+        labels = dlc.columns.get_level_values(0).unique()
+        for lbl in labels:
+            labelGroup = videoGroup.create_group(lbl)
+            for key in ('likelihood','x','y'):
+                labelGroup.create_dataset(key,data=dlc[lbl][key],compression='gzip',compression_opts=4)
+                
+h5File.close()   
     
 
 
