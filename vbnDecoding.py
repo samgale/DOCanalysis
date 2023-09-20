@@ -5,18 +5,16 @@ Created on Wed Sep 13 15:25:55 2023
 @author: svc_ccg
 """
 
-import os
+import os, time
 import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
 import h5py
-import decord
 import skvideo
 skvideo.setFFmpegPath(r"C:\Users\svc_ccg\Desktop\ffmpeg\bin") # run this before importing skvideo.io
-import skvideo.io
-import facemap
+import facemap.process
 
 
 baseDir = r"C:\Users\svc_ccg\Desktop\Analysis\vbn"
@@ -30,22 +28,24 @@ sessionIds = stimTable['session_id'].unique()
 
 
 dlcLabel = 'nose_tip'
-roiParams = {'side': {'xoffset': -10, 'yoffset': -60, 'width': 450, 'height': 200},
-             'face': {'xoffset': -130, 'yoffset': -160, 'width': 450, 'height': 225}}
+roiParams = {'side': {'xoffset': -10, 'yoffset': -60, 'width': 110, 'height': 110},
+             'face': {'xoffset': -90, 'yoffset': -160, 'width': 220, 'height': 220}}
 
 
 dlcData = h5py.File(os.path.join(baseDir,'dlcData.hdf5'))
 alignedVideoFrameTimes = []
-for sessionIndex,sessionId in enumerate(sessionIds[:10]):
+for sessionIndex,sessionId in enumerate(sessionIds):
     print(sessionIndex)
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     stimStart = stim['start_time'].iloc[0]
     stimEnd = stim['stop_time'].iloc[-1]
     
+    videoSessionIndex = []
     frameTimes = []
     frameIndex = []
     for videoType in ('side','face'):
         i = np.where(videoTable['session_id'] == sessionId)[0][0]
+        videoSessionIndex.append(i)
         frameTimesPath = videoTable.loc[i,videoType+'_timestamp_path']
         ft = np.load(frameTimesPath)
         fi = np.where((ft >= stimStart) & (ft <= stimEnd))[0]
@@ -56,52 +56,41 @@ for sessionIndex,sessionId in enumerate(sessionIds[:10]):
     frameIndex[i] = frameIndex[i][:-1]
     alignedVideoFrameTimes.append(frameTimes[i][:-1])
     
-    for i,videoType in enumerate(('side','face')):    
+    for i,(videoType,sbin) in enumerate(zip(('side','face'),(1,2))):    
         likelihood = dlcData[str(sessionId)][videoType][dlcLabel]['likelihood'][()][frameIndex[i]]
         x,y = [int(np.average(dlcData[str(sessionId)][videoType][dlcLabel][c][()][frameIndex[i]],weights=likelihood)) for c in ('x','y')]
         roi = np.array([x + roiParams[videoType]['xoffset'], y + roiParams[videoType]['yoffset'],
                         roiParams[videoType]['width'], roiParams[videoType]['height']])
         
+        videoPath = videoTable.loc[videoSessionIndex[i],videoType+'_video']
+        facemapSavePath = os.path.join(baseDir,'facemapOutput')
+        
         t = time.perf_counter()
-        videoInPath = videoTable.loc[i,videoType+'_video']
-        videoIn = decord.VideoReader(videoInPath)
-        frameRate = videoIn.get_avg_fps()
-        videoOutPath = os.path.join(baseDir,'videos',str(sessionId)+'_'+videoType+'.mp4')
-        videoOut = skvideo.io.FFmpegWriter(videoOutPath,
-                                           inputdict={'-r':str(frameRate)},
-                                           outputdict={'-r':str(frameRate),'-vcodec':'libx264','-crf':'17'})
-        for frame in frameIndex[i]:
-            image = videoIn[frame].asnumpy()
-            videoOut.writeFrame(image[roi[1]:roi[1]+roi[3],roi[0]:roi[0]+roi[2]])
-        videoIn.release()
-        videoOut.close()
+        
+        proc = {'sx': np.array([0]),
+                'sy': np.array([0]),
+                'sbin': sbin,
+                'fullSVD': True,
+                'save_mat': True,
+                'rois': [{'rind': 1,
+                          'rtype': 'motion SVD',
+                          'ivid': 0,
+                          'xrange': np.arange(roi[0],roi[0]+roi[2]),
+                          'yrange': np.arange(roi[1],roi[1]+roi[3])}],
+                'savepath': facemapSavePath}
+        
+        facemap.process.run(filenames=[[videoPath]],
+                            sbin=sbin,
+                            motSVD=True,
+                            movSVD=True,
+                            GUIobject=None,
+                            parent=None,
+                            proc=proc,
+                            savepath=facemapSavePath)
+        
         print(time.perf_counter()-t)
 dlcData.close()
 # save alignedVideoFrameTimes
-
-
-side = cv2.VideoCapture(r'C:\\Users\\svc_ccg\\Desktop\\Analysis\\vbn\\videos\\1044385384_side.mp4')
-face = cv2.VideoCapture(r'C:\\Users\\svc_ccg\\Desktop\\Analysis\\vbn\\videos\\1044385384_face.mp4')
-videoOutPath = os.path.join(baseDir,'videos',str(sessionId)+'_merged.mp4')
-videoOut = skvideo.io.FFmpegWriter(videoOutPath,
-                                   inputdict={'-r':str(frameRate)},
-                                   outputdict={'-r':str(frameRate),'-vcodec':'libx264','-crf':'17'})
-for _ in range(3600):
-    frame = np.zeros((425,450),dtype=np.uint8)
-    isImage,image = side.read()
-    image = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
-    frame[:200,:] = image
-    isImage,image = face.read()
-    image = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
-    frame[200:,:] = image
-    videoOut.writeFrame(frame)
-videoOut.close()
-side.release()
-face.release()
-
-
-
-facemap.process
 
 
 
