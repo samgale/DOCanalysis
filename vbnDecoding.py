@@ -46,49 +46,83 @@ for sessionIndex,sessionId in enumerate(sessionIds):
         videoPath = videoTable.loc[videoIndex,videoType+'_video']
         facemapSavePath = os.path.join(baseDir,'facemapOutput')
         
-        proc = {'sx': np.array([0]),
-                'sy': np.array([0]),
-                'sbin': sbin,
-                'fullSVD': False, # computes SVD for full video and roi if True else just roi
-                'save_mat': False,
-                'rois': [{'rind': 1,
-                          'rtype': 'motion SVD',
-                          'ivid': 0,
-                          'xrange': np.arange(roi[0],roi[0]+roi[2]),
-                          'yrange': np.arange(roi[1],roi[1]+roi[3])}],
-                'savepath': facemapSavePath}
+        # proc = {'sx': np.array([0]),
+        #         'sy': np.array([0]),
+        #         'sbin': sbin,
+        #         'fullSVD': False, # computes SVD for full video and roi if True else just roi
+        #         'save_mat': False,
+        #         'rois': [{'rind': 1,
+        #                   'rtype': 'motion SVD',
+        #                   'ivid': 0,
+        #                   'xrange': np.arange(roi[0],roi[0]+roi[2]),
+        #                   'yrange': np.arange(roi[1],roi[1]+roi[3])}],
+        #         'savepath': facemapSavePath}
         
-        facemap.process.run(filenames=[[videoPath]],
-                            sbin=sbin,
-                            motSVD=True,
-                            movSVD=True, # throws an error if False
-                            GUIobject=None,
-                            parent=None,
-                            proc=proc,
-                            savepath=facemapSavePath)
+        # facemap.process.run(filenames=[[videoPath]],
+        #                     sbin=sbin,
+        #                     motSVD=True,
+        #                     movSVD=True, # throws an error if False
+        #                     GUIobject=None,
+        #                     parent=None,
+        #                     proc=proc,
+        #                     savepath=facemapSavePath)
+        
+        videoName = os.path.basename(videoPath)
+        facemapDataPath = os.path.join(facemapSavePath,videoName[:-4]+'_proc.npy')
+        facemapData = np.load(facemapDataPath,allow_pickle=True).item()
+        
+        h5Out = h5py.File(os.path.join(baseDir,'facemapOutput',facemapDataPath[:-3]+'hdf5'),'w')
+        d = {}
+        d['xrange'] = facemapData['rois'][0]['xrange']
+        d['yrange'] = facemapData['rois'][0]['yrange']
+        d['xrange_bin'] = facemapData['rois'][0]['xrange_bin']
+        d['yrange_bin'] = facemapData['rois'][0]['yrange_bin']
+        d['avgframe'] = facemapData['avgframe_reshape']
+        d['avgmotion'] = facemapData['avgmotion_reshape']
+        d['motSv'] = facemapData['motSv']
+        d['motSVD'] = facemapData['motSVD'][1]
+        d['motMask'] = facemapData['motMask_reshape'][1]
+        for key,val in d.items():
+            h5Out.create_dataset(key,data=val,compression='gzip',compression_opts=4)
+        h5Out.close()
+        # np.savez_compressed(facemapDataPath[:-3]+'npz',**d)
+        # os.remove(facemapDataPath)
 dlcData.close()
 
 
-
-f = r"C:\Users\svc_ccg\Desktop\Analysis\vbn\facemapOutput\1044385384_524761_20200819.face_proc.npy"
-
-facemapData = np.load(f,allow_pickle=True).item()
-
-d = {}
-d['xrange'] = facemapData['rois'][0]['xrange']
-d['yrange'] = facemapData['rois'][0]['yrange']
-d['xrange_bin'] = facemapData['rois'][0]['xrange_bin']
-d['yrange_bin'] = facemapData['rois'][0]['yrange_bin']
-d['motSv'] = facemapData['motSv']
-d['motSVD'] = facemapData['motSVD'][1]
-d['motMask'] = facemapData['motMask_reshape'][1]
-
-np.savez_compressed(f[:-3]+'npz',**d)
-
-
-f = r"C:\Users\svc_ccg\Desktop\Analysis\vbn\facemapOutput\1044385384_524761_20200819.face_proc.npz"
-
-d = np.load(f)
+#
+fig = plt.figure()
+gs = matplotlib.gridspec.GridSpec(2,3)
+for i,videoType in enumerate(('side','face')):
+    videoName = os.path.basename(videoTable.loc[videoIndex,videoType+'_video'])
+    facemapDataPath = os.path.join(baseDir,'facemapOutput',videoName[:-4]+'_proc.hdf5')
+    facemapData = h5py.File(facemapDataPath)
+    x = facemapData['xrange_bin'][()]
+    y = facemapData['yrange_bin'][()]
+    
+    ax = fig.add_subplot(gs[i,0])
+    ax.imshow(facemapData['avgframe'][()][y,:][:,x],cmap='gray',interpolation=None)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if i==0:
+        ax.set_title('average frame')
+    
+    ax = fig.add_subplot(gs[i,1])
+    ax.imshow(facemapData['avgmotion'][()][y,:][:,x],cmap='gray')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if i==0:
+        ax.set_title('average motion')
+    
+    ax = fig.add_subplot(gs[i,2])
+    ax.imshow(np.average(facemapData['motMask'][()],weights=facemapData['motSv'][()],axis=2),cmap='gray')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if i==0:
+        ax.set_title('weighted average\nSVD projection')
+    
+    facemapData.close()
+plt.tight_layout()
 
 
 # decode licks from facemap SVDs
@@ -137,8 +171,9 @@ def crossValidate(model,X,y,nSplits):
 decodeData = {sessionId: {region: {layer: {} for layer in layers} for region in regions} for sessionId in sessionIds}
 model = LinearSVC(C=1.0,max_iter=int(1e4))
 nCrossVal = 5
-decodeWindowEnd = 0.5
-decodeWindows = np.arange(0,decodeWindowEnd,1/60)
+decodeWindowEnd = 0.75
+frameInterval = 1/60
+decodeWindows = np.arange(0,decodeWindowEnd+frameInterval/2,frameInterval)
 warnings.filterwarnings('ignore')
 for sessionIndex,sessionId in enumerate(sessionIds):
     print(sessionIndex)
@@ -164,9 +199,9 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
     for videoType in ('side','face'):
         videoName = os.path.basename(videoTable.loc[videoIndex,videoType+'_video'])
-        facemapDataPath = os.path.join(baseDir,'facemapOutput',videoName[:-4]+'_proc.npz')
-        facemapData = np.load(facemapDataPath)
-        svd = facemapData['motSVD']
+        facemapDataPath = os.path.join(baseDir,'facemapOutput',videoName[:-4]+'_proc.hdf5')
+        with h5py.File(facemapDataPath) as facemapData:
+            svd = facemapData['motSVD'][()]
         frameTimesPath = videoTable.loc[videoIndex,videoType+'_timestamp_path']
         frameTimes = np.load(frameTimesPath)
         flashSvd.append([])
@@ -194,94 +229,15 @@ for sessionIndex,sessionId in enumerate(sessionIds):
 warnings.filterwarnings('default')
 
 
-
-warnings.filterwarnings('ignore')
-for sessionIndex,sessionId in enumerate(sessionIds):
-    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
-    spikes = unitData[str(sessionId)]['spikes']
-    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes = np.array(stim['start_time'])
-    changeTimes = flashTimes[stim['is_change']]
-    hit = np.array(stim['hit'][stim['is_change']])
-    engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
-    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
-    changeFlash = np.where(stim['is_change'] & ~autoRewarded & engaged)[0]
-    nonChangeFlashes = np.array(engaged &
-                                (~stim['is_change']) & 
-                                (~stim['omitted']) & 
-                                (~stim['previous_omitted']) & 
-                                (stim['flashes_since_change']>5) &
-                                (stim['flashes_since_last_lick']>1))
-    lick = np.array(stim['lick_for_flash'])[nonChangeFlashes]
-    
-    lickDecodeData[sessionId]['image'] = np.array(stim['image_name'])[nonChangeFlashes]
-    lickDecodeData[sessionId]['flashesSinceLick'] = np.array(stim['flashes_since_last_lick'])[nonChangeFlashes]
-    lickDecodeData[sessionId]['lick'] = lick
-    
-    nFlashes = nonChangeFlashes.sum()
-    for region in regions:
-        inRegion = np.in1d(units['structure_acronym'],region)
-        if not any(inRegion):
-            continue
-        for layer in ('all',):
-            print('session '+str(sessionIndex+1)+', '+str(region)+', '+str(layer))
-            if layer=='all':
-                inLayer = inRegion
-            elif 'VIS' in region:
-                inLayer = inRegion & np.in1d(units['cortical_layer'],layer)
-            else:
-                continue
-            if not any(inLayer):
-                continue
-            sp = np.zeros((inLayer.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
-            for i,u in enumerate(np.where(inLayer)[0]):
-                sp[i]=spikes[u,:,:]
-                
-            changeSp = sp[:,changeFlash,:]
-            preChangeSp = sp[:,changeFlash-1,:]
-            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
-            nUnits = hasResp.sum()
-            if nUnits < sampleSize:
-                continue
-            flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nFlashes,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
-            
-            if sampleSize>1:
-                if sampleSize==nUnits:
-                    nSamples = 1
-                    unitSamples = [np.arange(nUnits)]
-                else:
-                    # >99% chance each neuron is chosen at least once
-                    nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
-                    unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
-            else:
-                nSamples = nUnits
-                unitSamples = [[i] for i in range(nUnits)]
-            trainAccuracy = np.full((len(unitSamples),len(decodeWindows)),np.nan)
-            featureWeights = np.full((len(unitSamples),len(decodeWindows),nUnits,len(decodeWindows)),np.nan)
-            accuracy = trainAccuracy.copy()
-            balancedAccuracy = accuracy.copy()
-            prediction = np.full((len(unitSamples),len(decodeWindows),nFlashes),np.nan)
-            confidence = prediction.copy()
-            for i,unitSamp in enumerate(unitSamples):
-                for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
-                    X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nFlashes,-1))                        
-                    cv = crossValidate(model,X,lick,nCrossVal)
-                    trainAccuracy[i,j] = np.mean(cv['train_score'])
-                    featureWeights[i,j,unitSamp,:winEnd] = np.mean(cv['coef'],axis=0).reshape(sampleSize,winEnd)
-                    accuracy[i,j] = np.mean(cv['test_score'])
-                    balancedAccuracy[i,j] = sklearn.metrics.balanced_accuracy_score(lick,cv['predict'])
-                    prediction[i,j] = cv['predict']
-                    confidence[i,j] = cv['decision_function']
-            lickDecodeData[sessionId][region][layer]['trainAccuracy'] = np.median(trainAccuracy,axis=0)
-            lickDecodeData[sessionId][region][layer]['featureWeights'] = np.nanmedian(featureWeights,axis=0)
-            lickDecodeData[sessionId][region][layer]['accuracy'] = np.median(accuracy,axis=0)
-            lickDecodeData[sessionId][region][layer]['balancedAccuracy'] = np.median(balancedAccuracy,axis=0) 
-            lickDecodeData[sessionId][region][layer]['prediction'] = scipy.stats.mode(prediction,axis=0)[0][0]
-            lickDecodeData[sessionId][region][layer]['confidence'] = np.median(confidence,axis=0)
-warnings.filterwarnings('default')
-
-
-
-
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.plot(decodeWindows,balancedAccuracy,'k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([0.5,0.85])
+ax.set_xlabel('Time from non-change flash onset (ms)')
+ax.set_ylabel('Lick decoding balanced accuracy')
+plt.tight_layout()
 
 

@@ -551,7 +551,7 @@ state = 'active'
 x = psthBins-psthBinSize/2
 psthAllUnits = {region: {} for region in regions} 
 for region,lbl in zip(regions,regionLabels):
-    for resp in respLabels[:2]:
+    for resp in respLabels:
         d = []
         for sessionId in sessionIds:
             if (all(len(psth[sessionId][region][layer][state][resp])>0 and
@@ -1559,8 +1559,11 @@ plt.tight_layout()
 
 # non-change lick decoding
 lickDecodeData = {sessionId: {region: {layer: {} for layer in layers} for region in regions} for sessionId in sessionIds}
+model = LinearSVC(C=1.0,max_iter=int(1e4))
+nCrossVal = 5
 sampleSize = 20
-decodeWindowEnd = 500
+decodeWindowSize = 10
+decodeWindowEnd = 750
 decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
 warnings.filterwarnings('ignore')
