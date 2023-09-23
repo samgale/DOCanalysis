@@ -93,6 +93,7 @@ for sessionIndex,sessionId in enumerate(sessionIds):
         d['motSv'] = facemapData['motSv']
         d['motSVD'] = facemapData['motSVD'][1]
         d['motMask'] = facemapData['motMask_reshape'][1]
+        d['motion'] = facemapData['motion'][1]
         for key,val in d.items():
             h5Out.create_dataset(key,data=val,compression='gzip',compression_opts=4)
         h5Out.close()
@@ -304,6 +305,7 @@ nCrossVal = 5
 decodeWindowEnd = 0.75
 frameInterval = 1/60
 decodeWindows = np.arange(0,decodeWindowEnd+frameInterval/2,frameInterval)
+useMotion = True
 warnings.filterwarnings('ignore')
 for sessionIndex,sessionId in enumerate(sessionIds):
     print(sessionIndex)
@@ -340,8 +342,12 @@ for sessionIndex,sessionId in enumerate(sessionIds):
             for c in ('x','y'):
                 a[-1].append([])
                 d = dlcData[str(sessionId)][videoType][key][c][()]
+                if useMotion:
+                    d = np.absolute(np.diff(d))
                 for flashTime in flashTimes[nonChangeFlashes & ~earlyLick]:
                     frameIndex = np.searchsorted(frameTimes,decodeWindows+flashTime)
+                    if useMotion:
+                        frameIndex -= 1
                     a[-1][-1].append(d[frameIndex])
         features.append(np.array(a).reshape((len(featureNames)*2,nFlashes,len(decodeWindows))).transpose((1,2,0)))
     features = np.concatenate(features,axis=-1)
