@@ -12,6 +12,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
 import h5py
+import cv2
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
@@ -32,8 +33,30 @@ dlcLabel = 'nose_tip'
 roiParams = {'side': {'xoffset': -10, 'yoffset': -60, 'width': 110, 'height': 110},
              'face': {'xoffset': -90, 'yoffset': -160, 'width': 220, 'height': 220}}
 
-roiParams = {'side': {'xoffset': -5, 'yoffset': -10, 'width': 40, 'height': 40},
-             'face': {'xoffset': -35, 'yoffset': -50, 'width': 80, 'height': 80}}
+roiParams = {'side': {'xoffset': -3, 'yoffset': -10, 'width': 35, 'height': 35},
+             'face': {'xoffset': -30, 'yoffset': -50, 'width': 70, 'height': 70}}
+
+
+# show roi
+dlcData = h5py.File(os.path.join(baseDir,'dlcData.hdf5'))
+for sessionIndex,sessionId in enumerate(sessionIds[10:20]):
+    print(sessionIndex)
+    for videoType,sbin in zip(('face',),(1,)):  # ('side','face'),(1,2)
+        likelihood = dlcData[str(sessionId)][videoType][dlcLabel]['likelihood'][()]
+        x,y = [int(np.average(dlcData[str(sessionId)][videoType][dlcLabel][c][()],weights=likelihood)) for c in ('x','y')]
+        roi = np.array([x + roiParams[videoType]['xoffset'], y + roiParams[videoType]['yoffset'],
+                        roiParams[videoType]['width'], roiParams[videoType]['height']])
+        
+        videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
+        videoPath = videoTable.loc[videoIndex,videoType+'_video']
+        
+        video = cv2.VideoCapture(videoPath)
+        video.read()
+        image = video.read()[1]
+        plt.figure()
+        plt.imshow(image[roi[1]:roi[1]+roi[3],roi[0]:roi[0]+roi[2],0],cmap='gray')
+        video.release()
+
 
 
 # run facemap
@@ -48,13 +71,6 @@ for sessionIndex,sessionId in enumerate(sessionIds):
         
         videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
         videoPath = videoTable.loc[videoIndex,videoType+'_video']
-        
-        # video = cv2.VideoCapture(videoPath)
-        # video.read()
-        # image = video.read()[1]
-        # plt.figure()
-        # plt.imshow(image[roi[1]:roi[1]+roi[3],roi[0]:roi[0]+roi[2],0],cmap='gray')
-        # video.release()
         
         facemapSavePath = os.path.join(baseDir,'facemapOutput')
         proc = {'sx': np.array([0]),
@@ -247,7 +263,8 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     lickTimes = np.array(stim['lick_time'])
     lickLatency = lickTimes - flashTimes
     earlyLick = lickLatency < 0.15
-    nFlashes = np.sum(nonChangeFlashes & ~earlyLick)
+    lateLick = lickLatency > 0.75
+    nFlashes = np.sum(nonChangeFlashes & ~earlyLick & ~lateLick)
     
     flashSvd = []
     videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
@@ -259,7 +276,7 @@ for sessionIndex,sessionId in enumerate(sessionIds):
         frameTimesPath = videoTable.loc[videoIndex,videoType+'_timestamp_path']
         frameTimes = np.load(frameTimesPath)
         flashSvd.append([])
-        for flashTime in flashTimes[nonChangeFlashes & ~earlyLick]:
+        for flashTime in flashTimes[nonChangeFlashes & ~earlyLick & ~lateLick]:
             frameIndex = np.searchsorted(frameTimes,decodeWindows+flashTime)
             flashSvd[-1].append(svd[frameIndex])
     flashSvd = np.concatenate(flashSvd,axis=2)
@@ -270,7 +287,7 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     balancedAccuracy = []
     prediction = []
     confidence = []
-    y = lick[nonChangeFlashes & ~earlyLick] 
+    y = lick[nonChangeFlashes & ~earlyLick & ~lateLick] 
     for i in range(len(decodeWindows)):
         print(i)
         X = flashSvd[:,:i+1].reshape(nFlashes,-1)   
@@ -328,7 +345,8 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     lickTimes = np.array(stim['lick_time'])
     lickLatency = lickTimes - flashTimes
     earlyLick = lickLatency < 0.15
-    nFlashes = np.sum(nonChangeFlashes & ~earlyLick)
+    lateLick = lickLatency > 0.75
+    nFlashes = np.sum(nonChangeFlashes & ~earlyLick & ~lateLick)
     
     features = []
     videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
@@ -358,7 +376,7 @@ for sessionIndex,sessionId in enumerate(sessionIds):
     balancedAccuracy = []
     prediction = []
     confidence = []
-    y = lick[nonChangeFlashes & ~earlyLick] 
+    y = lick[nonChangeFlashes & ~earlyLick & ~lateLick] 
     for i in range(len(decodeWindows)):
         print(i)
         X = features[:,:i+1].reshape(nFlashes,-1)   
