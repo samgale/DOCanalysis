@@ -39,7 +39,7 @@ roiParams = {'side': {'xoffset': -3, 'yoffset': -10, 'width': 35, 'height': 35},
 
 # show roi
 dlcData = h5py.File(os.path.join(baseDir,'dlcData.hdf5'))
-for sessionIndex,sessionId in enumerate(sessionIds[10:20]):
+for sessionIndex,sessionId in enumerate(sessionIds):
     print(sessionIndex)
     for videoType,sbin in zip(('face',),(1,)):  # ('side','face'),(1,2)
         likelihood = dlcData[str(sessionId)][videoType][dlcLabel]['likelihood'][()]

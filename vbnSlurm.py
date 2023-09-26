@@ -20,10 +20,10 @@ stdout_location = os.path.join(os.path.expanduser('~'),'job_records')
 # make the job record location if it doesn't already exist
 os.mkdir(stdout_location) if not os.path.exists(stdout_location) else None
 
-# build the python path
-conda_environment = 'facemap'
-python_path = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis/miniconda/envs/facemap/bin/python'
+# python path
+python_path = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis/miniconda/envs/facemap/python.exe'
 
+# call the `sbatch` command to run the jobs
 slurm = Slurm(cpus_per_task=1,
               partition='braintv',
               job_name='vbn session metrics',
@@ -31,7 +31,6 @@ slurm = Slurm(cpus_per_task=1,
               time='6:00:00',
               mem_per_cpu='32gb')
 
-# call the `sbatch` command to run the jobs
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 sessionIds = stimTable['session_id'].unique()
