@@ -6,10 +6,12 @@ Created on Wed Oct 19 14:37:16 2022
 """
 
 import argparse
+import math
 import os
 import warnings
 import numpy as np
 import pandas as pd
+import scipy.stats
 import h5py
 import sklearn
 from sklearn.svm import LinearSVC
@@ -131,12 +133,14 @@ def crossValidate(model,X,y,nSplits):
     return cv
 
 
-def getNonChangeFlashes(sessionId):
+def getFlashTimes(sessionId):
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes = np.array(stim['start_time'])
     changeTimes = flashTimes[stim['is_change']]
     hit = np.array(stim['hit'][stim['is_change']])
     engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
+    autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
+    changeFlashes = stim['is_change'] & ~autoRewarded & engaged
     nonChangeFlashes = np.array(engaged &
                                 (~stim['is_change']) & 
                                 (~stim['omitted']) & 
@@ -148,8 +152,8 @@ def getNonChangeFlashes(sessionId):
     lickLatency = lickTimes - flashTimes
     earlyLick = lickLatency < 0.15
     lateLick = lickLatency > 0.75
-    ind = nonChangeFlashes & ~earlyLick & ~lateLick
-    return flashTimes[ind], lick[ind]
+    nonChangeFlashes[earlyLick | lateLick] = False
+    return flashTimes, changeFlashes, nonChangeFlashes, lick
 
 
 def decodeLicksFromFacemap(sessionId):
@@ -159,7 +163,9 @@ def decodeLicksFromFacemap(sessionId):
     frameInterval = 1/60
     decodeWindows = np.arange(0,decodeWindowEnd+frameInterval/2,frameInterval)
     
-    flashTimes,lick = getNonChangeFlashes(sessionId)
+    flashTimes,changeFlashes,nonChangeFlashes,lick = getFlashTimes(sessionId)
+    flashTimes = flashTimes[nonChangeFlashes]
+    lick = lick[nonChangeFlashes]
     
     flashSvd = []
     videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
@@ -178,6 +184,8 @@ def decodeLicksFromFacemap(sessionId):
     flashSvd = np.concatenate(flashSvd,axis=2)
     
     d = {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
+    d['decodeWindows'] = decodeWindows
+    d['lick'] = lick
     y = lick
     warnings.filterwarnings('ignore')
     for i in range(len(decodeWindows)):
@@ -226,9 +234,12 @@ def decodeLicksFromUnits(sessionId):
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
-    flashTimes,lick = getNonChangeFlashes(sessionId)
+    flashTimes,changeFlashes,nonChangeFlashes,lick = getFlashTimes(sessionId)
     
     d = {region: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')} for region in regions}
+    d['decodeWindows'] = decodeWindows
+    d['lick'] = lick[nonChangeFlashes]
+    y = lick[nonChangeFlashes]
     warnings.filterwarnings('ignore')
     for region in regions:
         inRegion = np.in1d(units['structure_acronym'],region)
@@ -236,17 +247,17 @@ def decodeLicksFromUnits(sessionId):
             continue
                 
         sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
-        for i,u in enumerate(np.where(inLayer)[0]):
+        for i,u in enumerate(np.where(inRegion)[0]):
             sp[i]=spikes[u,:,:]
             
-        changeSp = sp[:,changeFlash,:]
-        preChangeSp = sp[:,changeFlash-1,:]
+        changeSp = sp[:,changeFlashes,:]
+        preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
         hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
         nUnits = hasResp.sum()
         if nUnits < unitSampleSize:
             continue
 
-        flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,len(flashTimes),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
+        flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nonChangeFlashes.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
         
         if unitSampleSize>1:
             if unitSampleSize==nUnits:
@@ -260,24 +271,23 @@ def decodeLicksFromUnits(sessionId):
             nSamples = nUnits
             unitSamples = [[i] for i in range(nUnits)]
 
-        y = lick
         for winEnd in (decodeWindows/decodeWindowSize).astype(int):
-            for metric in d:
+            for metric in d[region]:
                 d[region][metric].append([])
             for unitSamp in unitSamples:
-                X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((len(flashTimes),-1))                        
+                X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nonChangeFlashes.sum(),-1))                        
                 cv = crossValidate(model,X,y,nCrossVal)
                 d[region]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
                 d[region]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
                 d[region]['accuracy'][-1].append(np.mean(cv['test_score']))
-                d[region]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(lick,cv['predict']))
+                d[region]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
                 d[region]['prediction'][-1].append(cv['predict'])
                 d[region]['confidence'][-1].append(cv['decision_function'])
-            for metric in d:
+            for metric in d[region]:
                 if metric == 'prediction':
-                    d[region][metric][-1] = scipy.stats.mode(d[metric][-1],axis=0)[0][0]
+                    d[region][metric][-1] = scipy.stats.mode(d[region][metric][-1],axis=0)[0][0]
                 else:
-                    d[region][metric][-1] = np.median(d[metric][-1],axis=0)
+                    d[region][metric][-1] = np.median(d[region][metric][-1],axis=0)
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_'+str(sessionId)+'.npy'),d)
@@ -287,6 +297,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--sessionId',type=int)
     args = parser.parse_args()
-    runFacemap(args.sessionId)
+    #runFacemap(args.sessionId)
     #decodeLicksFromFacemap(args.sessionId)
-    #decodeLicksFromUnits(args.sessionId)
+    decodeLicksFromUnits(args.sessionId)
