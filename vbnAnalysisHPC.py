@@ -140,7 +140,7 @@ def getFlashTimes(sessionId):
     hit = np.array(stim['hit'][stim['is_change']])
     engaged = np.array([np.sum(hit[(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
-    changeFlashes = stim['is_change'] & ~autoRewarded & engaged
+    changeFlashes = np.array(stim['is_change'] & ~autoRewarded & engaged)
     nonChangeFlashes = np.array(engaged &
                                 (~stim['is_change']) & 
                                 (~stim['omitted']) & 
