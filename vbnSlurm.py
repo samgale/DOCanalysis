@@ -9,30 +9,25 @@ import os
 import pandas as pd
 from simple_slurm import Slurm
 
-
 # script to run
-script_path = os.path.join(os.path.expanduser('~'),'PythonScripts','vbnAnalysisHPC.py')
-print(f'running {script_path}')
+script_path = '/allen/ai/homedirs/samg/PythonScripts/vbnAnalysisHPC.py'
 
-# define the job record output folder
-stdout_location = os.path.join(os.path.expanduser('~'),'job_records')
-
-# make the job record location if it doesn't already exist
-os.mkdir(stdout_location) if not os.path.exists(stdout_location) else None
+# job record output folder
+stdout_location = '/allen/ai/homedirs/samg/job_records'
 
 # python path
-python_path = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis/miniconda/envs/facemap/python.exe'
+python_path = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis/miniconda/envs/facemap/bin/python'
 
 # call the `sbatch` command to run the jobs
 slurm = Slurm(cpus_per_task=1,
               partition='braintv',
-              job_name='vbn session metrics',
+              job_name='vbnFacemap',
               output=f'{stdout_location}/{Slurm.JOB_ARRAY_MASTER_ID}_{Slurm.JOB_ARRAY_ID}.out',
-              time='6:00:00',
+              time='24:00:00',
               mem_per_cpu='32gb')
 
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 sessionIds = stimTable['session_id'].unique()
-for sessionId in sessionIds:
+for sessionId in sessionIds[2:]:
     slurm.sbatch('{} {} --sessionId {}'.format(python_path,script_path,sessionId))

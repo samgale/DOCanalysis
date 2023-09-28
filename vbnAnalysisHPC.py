@@ -16,7 +16,6 @@ from sklearn.svm import LinearSVC
 import facemap.process
 
 
-
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
 
 outputDir = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis'
@@ -26,13 +25,16 @@ stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 videoTable = pd.read_excel(os.path.join(baseDir,'vbn_video_paths_full_validation.xlsx'))
 videoTable.insert(0,'session_id',[int(s[:s.find('_')]) for s in videoTable['exp_id']])
 
+unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
+unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
+
 
 def runFacemap(sessionId):
     dlcLabel = 'nose_tip'
     roiParams = {'side': {'xoffset': -3, 'yoffset': -10, 'width': 35, 'height': 35},
                  'face': {'xoffset': -30, 'yoffset': -50, 'width': 70, 'height': 70}}
     
-    for videoType,sbin in zip(('side','face'),(1,2)):
+    for videoType,sbin in zip(('side',),(1,)): # ('side','face'),(1,2)
         with h5py.File(os.path.join(baseDir,'dlcData.hdf5')) as dlcData:
             likelihood = dlcData[str(sessionId)][videoType][dlcLabel]['likelihood'][()]
             x,y = [int(np.average(dlcData[str(sessionId)][videoType][dlcLabel][c][()],weights=likelihood)) for c in ('x','y')]
@@ -40,7 +42,7 @@ def runFacemap(sessionId):
                         roiParams[videoType]['width'], roiParams[videoType]['height']])
         
         videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
-        videoPath = videoTable.loc[videoIndex,videoType+'_video']
+        videoPath = videoTable.loc[videoIndex,videoType+'_video'].replace('\\','/')
         
         facemapSavePath = os.path.join(outputDir,'facemapData')
         proc = {'sx': np.array([0]),
@@ -150,7 +152,7 @@ def getNonChangeFlashes(sessionId):
     return flashTimes[ind], lick[ind]
 
 
-def decodeLickFromFacemap(sessionId):
+def decodeLicksFromFacemap(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4))
     nCrossVal = 5
     decodeWindowEnd = 0.75
@@ -161,12 +163,13 @@ def decodeLickFromFacemap(sessionId):
     
     flashSvd = []
     videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
-    for videoType in ('side','face'):
-        videoName = os.path.basename(videoTable.loc[videoIndex,videoType+'_video'])
+    for videoType in ('side',): # ('side','face')
+        videoPath = videoTable.loc[videoIndex,videoType+'_video'].replace('\\','/')
+        videoName = os.path.basename(videoPath)
         facemapDataPath = os.path.join(outputDir,'facemapData',videoName[:-4]+'_proc.hdf5')
         with h5py.File(facemapDataPath) as facemapData:
             svd = facemapData['motSVD'][()]
-        frameTimesPath = videoTable.loc[videoIndex,videoType+'_timestamp_path']
+        frameTimesPath = videoTable.loc[videoIndex,videoType+'_timestamp_path'].replace('\\','/')
         frameTimes = np.load(frameTimesPath)
         flashSvd.append([])
         for flashTime in flashTimes:
@@ -176,23 +179,114 @@ def decodeLickFromFacemap(sessionId):
     
     d = {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
     y = lick
+    warnings.filterwarnings('ignore')
     for i in range(len(decodeWindows)):
-        print(i)
         X = flashSvd[:,:i+1].reshape(len(flashTimes),-1)   
         cv = crossValidate(model,X,y,nCrossVal)
         d['trainAccuracy'].append(np.mean(cv['train_score']))
         d['featureWeights'].append(np.mean(cv['coef'],axis=0).squeeze())
         d['accuracy'].append(np.mean(cv['test_score']))
         d['balancedAccuracy'].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
-        d['prediction.append'](cv['predict'])
-        d['confidence.append'](cv['decision_function'])
+        d['prediction'].append(cv['predict'])
+        d['confidence'].append(cv['decision_function'])
     warnings.filterwarnings('default')
     
-    np.save(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_'+str(sessionId)+'.npy'))
-    
+    np.save(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_'+str(sessionId)+'.npy'),d)
 
+
+def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
+    hasSpikes = ((respPsth[:,:,respWin].mean(axis=(1,2)) - basePsth[:,:,baseWin].mean(axis=(1,2))) / 0.001) > 0.1
+    
+    base = basePsth[:,:,baseWin].mean(axis=1)
+    resp = respPsth[:,:,respWin].mean(axis=1)
+    peak = np.max(resp-base.mean(axis=1)[:,None],axis=1)
+    hasPeakResp = peak > 5 * base.std(axis=1)
+    
+    base = basePsth[:,:,baseWin].mean(axis=2)
+    resp = respPsth[:,:,respWin].mean(axis=2)
+    pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
+    
+    return hasSpikes & hasPeakResp & (pval<0.05)
+
+
+def decodeLicksFromUnits(sessionId):
+    model = LinearSVC(C=1.0,max_iter=int(1e4))
+    nCrossVal = 5
+    unitSampleSize = 20
+    decodeWindowSize = 10
+    decodeWindowEnd = 750
+    decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
+
+    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+               'MRN','MB',('SCig','SCiw'),'APN','NOT',
+               ('HPF','DG','CA1','CA3'),('SUB','ProS','PRE','POST'))
+
+    baseWin = slice(680,750)
+    respWin = slice(30,100)
+
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    flashTimes,lick = getNonChangeFlashes(sessionId)
+    
+    d = {region: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')} for region in regions}
+    warnings.filterwarnings('ignore')
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+                
+        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(inLayer)[0]):
+            sp[i]=spikes[u,:,:]
+            
+        changeSp = sp[:,changeFlash,:]
+        preChangeSp = sp[:,changeFlash-1,:]
+        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        nUnits = hasResp.sum()
+        if nUnits < unitSampleSize:
+            continue
+
+        flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,len(flashTimes),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
+        
+        if unitSampleSize>1:
+            if unitSampleSize==nUnits:
+                nSamples = 1
+                unitSamples = [np.arange(nUnits)]
+            else:
+                # >99% chance each neuron is chosen at least once
+                nSamples = int(math.ceil(math.log(0.01)/math.log(1-unitSampleSize/nUnits)))
+                unitSamples = [np.random.choice(nUnits,unitSampleSize,replace=False) for _ in range(nSamples)]
+        else:
+            nSamples = nUnits
+            unitSamples = [[i] for i in range(nUnits)]
+
+        y = lick
+        for winEnd in (decodeWindows/decodeWindowSize).astype(int):
+            for metric in d:
+                d[region][metric].append([])
+            for unitSamp in unitSamples:
+                X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((len(flashTimes),-1))                        
+                cv = crossValidate(model,X,y,nCrossVal)
+                d[region]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
+                d[region]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
+                d[region]['accuracy'][-1].append(np.mean(cv['test_score']))
+                d[region]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(lick,cv['predict']))
+                d[region]['prediction'][-1].append(cv['predict'])
+                d[region]['confidence'][-1].append(cv['decision_function'])
+            for metric in d:
+                if metric == 'prediction':
+                    d[region][metric][-1] = scipy.stats.mode(d[metric][-1],axis=0)[0][0]
+                else:
+                    d[region][metric][-1] = np.median(d[metric][-1],axis=0)
+    warnings.filterwarnings('default')
+
+    np.save(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_'+str(sessionId)+'.npy'),d)
+
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--sessionId',type=int)
     args = parser.parse_args()
     runFacemap(args.sessionId)
+    #decodeLicksFromFacemap(args.sessionId)
+    #decodeLicksFromUnits(args.sessionId)
