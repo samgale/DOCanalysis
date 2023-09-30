@@ -5,9 +5,18 @@ Created on Fri Sep 29 14:39:37 2023
 @author: svc_ccg
 """
 
+import math
 import numpy as np
 import scipy.stats
 import sklearn
+
+
+def findNearest(array,values):
+    ind = np.searchsorted(array,values,side='left')
+    for i,j in enumerate(ind):
+        if j > 0 and (j == len(array) or math.fabs(values[i] - array[j-1]) < math.fabs(values[i] - array[j])):
+            ind[i] = j-1
+    return ind
 
 
 def getFlashTimes(stim):

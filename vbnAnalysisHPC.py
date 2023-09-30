@@ -16,7 +16,7 @@ import h5py
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
-from vbnAnalysisUtils import getFlashTimes, findResponsiveUnits, crossValidate
+from vbnAnalysisUtils import findNearest, getFlashTimes, findResponsiveUnits, crossValidate
 
 
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
@@ -116,7 +116,7 @@ def decodeLicksFromFacemap(sessionId):
         frameTimes = np.load(frameTimesPath)
         flashSvd.append([])
         for flashTime in flashTimes:
-            frameIndex = np.searchsorted(frameTimes,decodeWindows+flashTime)
+            frameIndex = findNearest(frameTimes,decodeWindows+flashTime)
             flashSvd[-1].append(svd[frameIndex])
     flashSvd = np.concatenate(flashSvd,axis=2)
     
@@ -222,5 +222,5 @@ if __name__ == "__main__":
     parser.add_argument('--sessionId',type=int)
     args = parser.parse_args()
     #runFacemap(args.sessionId)
-    #decodeLicksFromFacemap(args.sessionId)
-    decodeLicksFromUnits(args.sessionId)
+    decodeLicksFromFacemap(args.sessionId)
+    #decodeLicksFromUnits(args.sessionId)
