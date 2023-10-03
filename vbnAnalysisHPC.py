@@ -93,11 +93,12 @@ def runFacemap(sessionId):
 
 
 def decodeLicksFromFacemap(sessionId):
-    model = LinearSVC(C=1.0,max_iter=int(1e4))
+    model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight='balanced')
     nCrossVal = 5
+    decodeWindowStart = -0.75
     decodeWindowEnd = 0.75
     frameInterval = 1/60
-    decodeWindows = np.arange(0,decodeWindowEnd+frameInterval/2,frameInterval)
+    decodeWindows = np.arange(decodeWindowStart,decodeWindowEnd+frameInterval/2,frameInterval)
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,nonChangeFlashes,lick = getFlashTimes(stim)
@@ -140,9 +141,9 @@ def decodeLicksFromFacemap(sessionId):
 
 
 def decodeLicksFromUnits(sessionId):
-    model = LinearSVC(C=1.0,max_iter=int(1e4))
+    model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight='balanced')
     nCrossVal = 5
-    unitSampleSize = 20
+    unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
@@ -160,7 +161,8 @@ def decodeLicksFromUnits(sessionId):
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,nonChangeFlashes,lick = getFlashTimes(stim)
     
-    d = {region: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')} for region in regions}
+    d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
+         for sampleSize in unitSampleSize} for region in regions}
     d['decodeWindows'] = decodeWindows
     d['lick'] = lick[nonChangeFlashes]
     y = lick[nonChangeFlashes]
@@ -178,40 +180,44 @@ def decodeLicksFromUnits(sessionId):
         preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
         hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
         nUnits = hasResp.sum()
-        if nUnits < unitSampleSize:
-            continue
 
         flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nonChangeFlashes.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
         
-        if unitSampleSize>1:
-            if unitSampleSize==nUnits:
-                nSamples = 1
-                unitSamples = [np.arange(nUnits)]
-            else:
-                # >99% chance each neuron is chosen at least once
-                nSamples = int(math.ceil(math.log(0.01)/math.log(1-unitSampleSize/nUnits)))
-                unitSamples = [np.random.choice(nUnits,unitSampleSize,replace=False) for _ in range(nSamples)]
-        else:
-            nSamples = nUnits
-            unitSamples = [[i] for i in range(nUnits)]
-
-        for winEnd in (decodeWindows/decodeWindowSize).astype(int):
-            for metric in d[region]:
-                d[region][metric].append([])
-            for unitSamp in unitSamples:
-                X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nonChangeFlashes.sum(),-1))                        
-                cv = crossValidate(model,X,y,nCrossVal)
-                d[region]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
-                d[region]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
-                d[region]['accuracy'][-1].append(np.mean(cv['test_score']))
-                d[region]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
-                d[region]['prediction'][-1].append(cv['predict'])
-                d[region]['confidence'][-1].append(cv['decision_function'])
-            for metric in d[region]:
-                if metric == 'prediction':
-                    d[region][metric][-1] = scipy.stats.mode(d[region][metric][-1],axis=0)[0][0]
+        for sampleSize in unitSampleSize:
+            if nUnits < sampleSize:
+                continue
+            if sampleSize>1:
+                if sampleSize==nUnits:
+                    nSamples = 1
+                    unitSamples = [np.arange(nUnits)]
                 else:
-                    d[region][metric][-1] = np.median(d[region][metric][-1],axis=0)
+                    # >99% chance each neuron is chosen at least once
+                    nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
+                    unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
+            else:
+                nSamples = nUnits
+                unitSamples = [[i] for i in range(nUnits)]
+
+            for winEnd in decodeWindows:
+                if sampleSize!=20 and winEnd!=decodeWindows[-1]:
+                    continue
+                winEnd = int(winEnd/decodeWindowSize)
+                for metric in d[region][sampleSize]:
+                    d[region][sampleSize][metric].append([])
+                for unitSamp in unitSamples:
+                    X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nonChangeFlashes.sum(),-1))                        
+                    cv = crossValidate(model,X,y,nCrossVal)
+                    d[region][sampleSize]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
+                    d[region][sampleSize]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
+                    d[region][sampleSize]['accuracy'][-1].append(np.mean(cv['test_score']))
+                    d[region][sampleSize]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
+                    d[region][sampleSize]['prediction'][-1].append(cv['predict'])
+                    d[region][sampleSize]['confidence'][-1].append(cv['decision_function'])
+                for metric in d[region][sampleSize]:
+                    if metric == 'prediction':
+                        d[region][sampleSize][metric][-1] = scipy.stats.mode(d[region][sampleSize][metric][-1],axis=0)[0][0]
+                    else:
+                        d[region][sampleSize][metric][-1] = np.median(d[region][sampleSize][metric][-1],axis=0)
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_'+str(sessionId)+'.npy'),d)
@@ -222,5 +228,5 @@ if __name__ == "__main__":
     parser.add_argument('--sessionId',type=int)
     args = parser.parse_args()
     #runFacemap(args.sessionId)
-    decodeLicksFromFacemap(args.sessionId)
-    #decodeLicksFromUnits(args.sessionId)
+    #decodeLicksFromFacemap(args.sessionId)
+    decodeLicksFromUnits(args.sessionId)
