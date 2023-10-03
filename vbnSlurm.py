@@ -5,7 +5,7 @@ Created on Thu Oct 20 10:35:04 2022
 @author: svc_ccg
 """
 
-import os
+import os, glob
 import pandas as pd
 from simple_slurm import Slurm
 
@@ -29,5 +29,8 @@ slurm = Slurm(cpus_per_task=1,
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 sessionIds = stimTable['session_id'].unique()
+# npys = glob.glob(os.path.join('/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis/facemapLickDecoding','facemapLickDecoding_*.npy'))
 for sessionId in sessionIds[:2]:
+    # if any(str(sessionId) in f for f in npys):
+    #    continue
     slurm.sbatch('{} {} --sessionId {}'.format(python_path,script_path,sessionId))
