@@ -41,9 +41,10 @@ lickProb = nLicks / nFlashes
 for d in (nFlashes,nLicks,lickProb):
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
-    dsort = np.sort(d)
-    cumProb = np.array([np.sum(d<=i)/d.size for i in dsort])
-    ax.plot(dsort,cumProb,'k')
+    ax.hist(d)
+    # dsort = np.sort(d)
+    # cumProb = np.array([np.sum(d<=i)/d.size for i in dsort])
+    # ax.plot(dsort,cumProb,'k')
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -52,7 +53,6 @@ for d in (nFlashes,nLicks,lickProb):
 
 
 #
-
 for f in glob.glob(os.path.join(outputDir,'facemapData','*.hdf5')):
     sessionId = os.path.basename(f)[:10]
     fig = plt.figure(figsize=(3,6))
@@ -89,22 +89,52 @@ for f in glob.glob(os.path.join(outputDir,'facemapLickDecoding','facemapLickDeco
     a = d['balancedAccuracy']
     if a[0] > 0.6 or a[-1] < 0.8:
         s.append((os.path.basename(f)[-14:-5],a[0],a[-1]))
+        
+
 
 
 #
-decodeWindowEnd = 0.75
-frameInterval = 1/60
-decodeWindows = np.arange(0,decodeWindowEnd+frameInterval/2,frameInterval)
+fig = plt.figure(figsize=(6,6))
+gs = matplotlib.gridspec.GridSpec(11,10)
+i = 0
+j = 0
+for f in glob.glob(os.path.join(outputDir,'facemapData','*.hdf5')):
+    ax = fig.add_subplot(gs[i,j])
+    with h5py.File(f) as d:
+        x = d['xrange_bin'][()]
+        y = d['yrange_bin'][()]
+        ax.imshow(d['avgframe'][()][y,:][:,x],cmap='gray')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if j == 9:
+        i += 1
+        j = 0
+    else:
+        j += 1
+plt.tight_layout()
 
+
+
+
+
+
+#
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
+a = []
 for f in glob.glob(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_*.npy')):
     d = np.load(f,allow_pickle=True).item()
-    ax.plot(decodeWindows,d['balancedAccuracy'],'k',alpha=0.25)
+    if d['lick'].sum() >= 10:
+        ax.plot(d['decodeWindows'],d['balancedAccuracy'],'k',alpha=0.25)
+        a.append(d['balancedAccuracy'])
+m = np.mean(a,axis=0)
+s = np.std(a,axis=0)/(len(a)**0.5)
+ax.plot(d['decodeWindows'],m,color='r',lw=2)
+ax.fill_between(d['decodeWindows'],m+s,m-s,color='r',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_ylim([0.5,1])
+ax.set_ylim([0.45,1])
 ax.set_xlabel('Time from non-change flash onset (ms)')
 ax.set_ylabel('Lick decoding balanced accuracy')
 plt.tight_layout()
