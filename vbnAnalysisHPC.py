@@ -101,7 +101,7 @@ def decodeLicksFromFacemap(sessionId):
     decodeWindows = np.arange(decodeWindowStart,decodeWindowEnd+frameInterval/2,frameInterval)
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,nonChangeFlashes,lick = getFlashTimes(stim)
+    flashTimes,changeFlashes,nonChangeFlashes,lick,lickTimes = getFlashTimes(stim)
     flashTimes = flashTimes[nonChangeFlashes]
     lick = lick[nonChangeFlashes]
     
@@ -159,7 +159,7 @@ def decodeLicksFromUnits(sessionId):
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,nonChangeFlashes,lick = getFlashTimes(stim)
+    flashTimes,changeFlashes,nonChangeFlashes,lick,lickTimes = getFlashTimes(stim)
     
     d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
          for sampleSize in unitSampleSize} for region in regions}
