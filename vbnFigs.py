@@ -80,7 +80,8 @@ plt.tight_layout()
 # lick latency
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-bins = np.arange(0,0.751,1/60)
+lickLatBins = np.arange(0,0.751,1/60)
+lickLatTime = lickLatBins[:-1]+0.5/60
 cumProbLick = []
 for sessionId in sessionIds:
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
@@ -90,12 +91,12 @@ for sessionId in sessionIds:
         dsort = np.sort(lickLatency)
         cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
         ax.plot(dsort,cumProb,'k',alpha=0.25)
-        h = np.histogram(lickLatency,bins)[0]
+        h = np.histogram(lickLatency,lickLatBins)[0]
         cumProbLick.append(np.cumsum(h)/np.sum(h))
 m = np.mean(cumProbLick,axis=0)
 s = np.std(cumProbLick,axis=0)/(len(cumProbLick)**0.5)
-ax.plot(bins[:-1]+0.5/60,m,color='r',lw=2)
-ax.fill_between(bins[:-1]+0.5/60,m+s,m-s,color='r',alpha=0.25)
+ax.plot(lickLatTime,m,color='r',lw=2)
+ax.fill_between(lickLatTime,m+s,m-s,color='r',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -147,8 +148,9 @@ for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapLickDecoding','unb
         facemapLickDecoding.append(d['balancedAccuracy'])
 m = np.mean(facemapLickDecoding,axis=0)
 s = np.std(facemapLickDecoding,axis=0)/(len(facemapLickDecoding)**0.5)
-ax.plot(d['decodeWindows'],m,color='r',lw=2)
-ax.fill_between(d['decodeWindows'],m+s,m-s,color='r',alpha=0.25)
+facemapDecodingTime= d['decodeWindows']
+ax.plot(facemapDecodingTime,m,color='r',lw=2)
+ax.fill_between(facemapDecodingTime,m+s,m-s,color='r',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -188,17 +190,17 @@ for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unbala
             a = d[region][sampleSize]['balancedAccuracy']
             if len(a)>0:
                 unitLickDecoding[region].append(a)
-decodeWindows = d['decodeWindows']
+unitDecodingTime = (d['decodeWindows'] - d['decodeWindows'][0]/2) / 1000
 for region,clr,lbl in zip(regions,regionColors,regionLabels):
     if len(unitLickDecoding[region])>0:
         m = np.mean(unitLickDecoding[region],axis=0)
         s = np.std(unitLickDecoding[region],axis=0)/(len(unitLickDecoding[region])**0.5)
-        ax.plot(decodeWindows-decodeWindows[0]/2,m,color=clr,label=lbl+' (n='+str(len(unitLickDecoding[region]))+')')
+        ax.plot(unitDecodingTime,m,color=clr,label=lbl+' (n='+str(len(unitLickDecoding[region]))+')')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0.45,1])
-ax.set_xlabel('Time from non-change flash onset (ms)')
+ax.set_xlabel('Time from non-change flash onset (s)')
 ax.set_ylabel('Lick decoding balanced accuracy')
 ax.legend(loc='upper left',fontsize=8)
 plt.tight_layout()
@@ -252,19 +254,18 @@ for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unit
             a = d[region][sampleSize]['accuracy']
             if len(a)>0:
                 unitChangeDecoding[region].append(a)
-decodeWindows = d['decodeWindows']
 for region,clr,lbl in zip(regions,regionColors,regionLabels):
     if len(unitChangeDecoding[region])>0:
         m = np.mean(unitChangeDecoding[region],axis=0)
         s = np.std(unitChangeDecoding[region],axis=0)/(len(unitChangeDecoding[region])**0.5)
-        ax.plot(decodeWindows-decodeWindows[0]/2,m,color=clr,label=lbl+' (n='+str(len(unitChangeDecoding[region]))+')')
+        ax.plot(unitDecodingTime,m,color=clr,label=lbl+' (n='+str(len(unitChangeDecoding[region]))+')')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0.45,1])
-ax.set_xlabel('Time from change (ms)')
+ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Change decoding accuracy')
-ax.legend(loc='upper left',fontsize=8)
+ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
 
@@ -297,16 +298,72 @@ ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0.45,1])
 ax.set_xlabel('Number of units')
 ax.set_ylabel('Change decoding accuracy')
-ax.legend(loc='upper right',fontsize=8)
+ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
 
+# change decoding correlation with behavior
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+sampleSize = 20
+changeDecodingCorr = {region: [] for region in regions}
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
+    print(i)
+    d = np.load(f,allow_pickle=True).item()
+    hit = d['hit']
+    decodeWindows = d['decodeWindows']
+    if hit.sum() >= 10 and hit.sum() < hit.size:
+        for region in regions:
+            conf = d[region][sampleSize]['confidence']
+            if len(conf)>0:
+                changeDecodingCorr[region].append([np.corrcoef(hit,c[:hit.size])[0,1] for c in conf])
+for region,clr,lbl in zip(regions,regionColors,regionLabels):
+    if len(changeDecodingCorr[region])>0:
+        m = np.mean(changeDecodingCorr[region],axis=0)
+        s = np.std(changeDecodingCorr[region],axis=0)/(len(changeDecodingCorr[region])**0.5)
+        ax.plot(unitDecodingTime,m,color=clr,label=lbl+' (n='+str(len(changeDecodingCorr[region]))+')')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([-0.1,1])
+ax.set_xlabel('Time from change (s)')
+ax.set_ylabel('Change decoder correlation with behavior')
+ax.legend(loc='upper left',fontsize=8)
+plt.tight_layout()
 
 
-
-
-
-
+# summary plot
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+mbReg = ('SCig','SCiw')
+mbLbl = 'SC'
+for d,t,clr,lbl in zip((cumProbLick,facemapLickDecoding,unitLickDecoding[mbReg],
+                        changeDecodingCorr[mbReg],unitChangeDecoding[mbReg],
+                        unitChangeDecoding['VISam'],unitChangeDecoding['VISp']),
+                       (lickLatTime,facemapDecodingTime)+(unitDecodingTime,)*4,
+                       ('k','g','c','m','b','r'),
+                       ('lick prob','lick decoding (face motion, non-change flashes)','lick decoding ('+mbLbl+' units, non-change flashes)',
+                        'change decoder corrleation with behavior ('+mbLbl+' units)','change decoding ('+mbLbl+' units)',
+                        'change decoding (V1 units)')
+                      ):
+    m = np.mean(d,axis=0)
+    m -= m[0]
+    scale = 1/m[-1]
+    m *= scale
+    s = np.std(d,axis=0)/(len(cumProbLick)**0.5)
+    s *= scale
+    ax.plot(t,m,color=clr,label=lbl)
+    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([-0.05,1.05])
+ax.set_xlabel('Time from flash onset (s)')
+ax.set_ylabel('Normalized value')
+ax.legend(loc='lower right',fontsize=8)
+# ax.legend(loc='upper left',fontsize=8)
+plt.tight_layout()
 
 
 
