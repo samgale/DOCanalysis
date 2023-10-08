@@ -337,6 +337,8 @@ fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 mbReg = ('SCig','SCiw')
 mbLbl = 'SC'
+# mbReg = 'MRN'
+# mbLbl = 'MRN'
 for d,t,clr,lbl in zip((cumProbLick,facemapLickDecoding,unitLickDecoding[mbReg],
                         changeDecodingCorr[mbReg],unitChangeDecoding[mbReg],
                         unitChangeDecoding['VISam'],unitChangeDecoding['VISp']),
@@ -344,8 +346,7 @@ for d,t,clr,lbl in zip((cumProbLick,facemapLickDecoding,unitLickDecoding[mbReg],
                        ('k','g','c','m','b','r'),
                        ('lick prob','lick decoding (face motion, non-change flashes)','lick decoding ('+mbLbl+' units, non-change flashes)',
                         'change decoder corrleation with behavior ('+mbLbl+' units)','change decoding ('+mbLbl+' units)',
-                        'change decoding (V1 units)')
-                      ):
+                        'change decoding (V1 units)')):
     m = np.mean(d,axis=0)
     m -= m[0]
     scale = 1/m[-1]

@@ -305,6 +305,69 @@ def decodeChange(sessionId):
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_'+str(sessionId)+'.npy'),d)
+    
+
+def predictResposeTimesFromDecoder(sessionId):
+    model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
+    minUnits = 20
+    decodeWindowSize = 10
+    decodeWindowEnd = 100
+    decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
+
+    regions = ('VISp','VISam')
+
+    baseWin = slice(680,750)
+    respWin = slice(30,100)
+
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,nonChangeFlashes,lick,lickTimes,hit = getBehavData(stim)
+    nChange = changeFlashes.sum()
+    
+    d = {region: {metric: [] for metric in ('trainAccuracy','featureWeights','prediction','confidence')} for region in regions}
+    d['sessionId'] = sessionId
+    d['regions'] = regions
+    d['decodeWindows'] = decodeWindows
+    d['hit'] = hit[changeFlashes]
+    d['preChangeImage'] = np.array(stim['initial_image_name'])[changeFlashes]
+    d['changeImage'] = np.array(stim['change_image_name'])[changeFlashes]
+    d['novelImage'] = np.array(stim['novel_image']).astype(bool)
+    y = np.zeros(nChange*2)
+    y[:nChange] = 1
+    warnings.filterwarnings('ignore')
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+                
+        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(inRegion)[0]):
+            sp[i]=spikes[u,:,:]
+            
+        changeSp = sp[:,changeFlashes,:]
+        preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        nUnits = hasResp.sum()
+        if nUnits < minUnits:
+            continue
+        
+        for trial in range(nChange):
+            estimator = sklearn.base.clone(model)
+            X = np.concatenate([s[:,:,:decodeWindowEnd].sum(axis=-1).T for s in (changeSp,preChangeSp)])
+            trainInd = [tr for tr in range(nChange*2) if tr not in (trial,trial+nChange)]
+            estimator.fit(X[trainInd],y[trainInd])
+            d[region]['trainAccuracy'].append(estimator.score(X[trainInd],y[trainInd]))
+            d[region]['featureWeights'].append(estimator.coef_.squeeze())
+            d[region]['prediction'].append(estimator.predict(X[trial]))
+            d[region]['confidence'].append([])
+            for winEnd in decodeWindows:
+                X = changeSp[:,trial,:winEnd].sum(axis=-1)
+                d[region]['confidence'][-1].append(estimator.decision_function(X))
+    warnings.filterwarnings('default')
+
+    np.save(os.path.join(outputDir,'decoderResponseTimes','decoderResponseTimes_'+str(sessionId)+'.npy'),d)
 
     
 if __name__ == "__main__":
@@ -314,4 +377,5 @@ if __name__ == "__main__":
     #runFacemap(args.sessionId)
     #decodeLicksFromFacemap(args.sessionId)
     #decodeLicksFromUnits(args.sessionId)
-    decodeChange(args.sessionId)
+    #decodeChange(args.sessionId)
+    predictResposeTimesFromDecoder(args.sessionId)
