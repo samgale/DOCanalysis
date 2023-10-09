@@ -6,6 +6,7 @@ Created on Wed Oct 19 14:37:16 2022
 """
 
 import argparse
+import itertools
 import math
 import os
 import warnings
@@ -307,14 +308,14 @@ def decodeChange(sessionId):
     np.save(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_'+str(sessionId)+'.npy'),d)
     
 
-def predictResposeTimesFromDecoder(sessionId):
+def predictResponseTimesFromDecoder(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     minUnits = 20
     decodeWindowSize = 1
-    decodeWindowEnd = 100
+    decodeWindowEnd = 150
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
-    regions = ('VISp','VISam')
+    regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -333,7 +334,7 @@ def predictResposeTimesFromDecoder(sessionId):
     d['hit'] = hit[changeFlashes]
     d['preChangeImage'] = np.array(stim['initial_image_name'])[changeFlashes]
     d['changeImage'] = np.array(stim['change_image_name'])[changeFlashes]
-    d['novelImage'] = np.array(stim['novel_image']).astype(bool)
+    d['novelImage'] = np.array(stim['novel_image']).astype(bool)[changeFlashes]
     y = np.zeros(nChange*2)
     y[:nChange] = 1
     warnings.filterwarnings('ignore')
@@ -371,6 +372,93 @@ def predictResposeTimesFromDecoder(sessionId):
 
     np.save(os.path.join(outputDir,'decoderResponseTimes','decoderResponseTimes_'+str(sessionId)+'.npy'),d)
 
+
+def predictResponseTimesFromIntegrator(sessionId):
+    regions = ('VISp','VISam')
+    minUnits = 20
+    baseWin = slice(680,750)
+    respWin = slice(30,100)
+    tEnd = 150
+    leak = np.arange(0,1.01,0.1)
+    threshold = np.arange(0.5,1.51,0.1)
+    fitParams = list(itertools.product(leak,threshold))
+
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+    
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,nonChangeFlashes,lick,lickTimes,hit = getBehavData(stim)
+    nChange = changeFlashes.sum()
+    
+    d = {region: {} for region in regions}
+    d['sessionId'] = sessionId
+    d['regions'] = regions
+    d['hit'] = hit[changeFlashes]
+    d['preChangeImage'] = np.array(stim['initial_image_name'])[changeFlashes]
+    d['changeImage'] = np.array(stim['change_image_name'])[changeFlashes]
+    d['novelImage'] = np.array(stim['novel_image']).astype(bool)[changeFlashes]
+    y = np.zeros(nChange*2)
+    y[:nChange] = 1
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+                
+        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(inRegion)[0]):
+            sp[i]=spikes[u,:,:]
+            
+        changeSp = sp[:,changeFlashes,:]
+        preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        nUnits = hasResp.sum()
+        if nUnits < minUnits:
+            continue
+        
+        X = []
+        for s in (changeSp[hasResp],preChangeSp[hasResp]):
+            base = s[:,:,baseWin].mean()
+            X.append(s[:,:,1:tEnd].mean(axis=0) - base)
+        X = np.concatenate([s[hasResp].mean(axis=0) for s in (changeSp,preChangeSp)])
+        baseSpRate = s[:,baseWin].mean()
+        X -= baseSpRate
+        X = X[:,1:tEnd]
+        X /= X.max()
+
+        params = []
+        for trial in range(nChange):
+            trainInd = [tr for tr in range(nChange*2) if tr not in (trial,trial+nChange)]
+            logLoss = []
+            for lk,th in fitParams:
+                p = np.zeros(nChange*2-2)
+                for i,x in enumerate(X[trainInd]):
+                    v = 0
+                    for s in x:
+                        v += s - lk*v
+                        if v > th:
+                            p[i] = 1
+                logLoss.append(sklearn.metrics.log_loss(y[trainInd],p))
+            params.append(fitParams[np.argmin(logLoss)])
+        lk,th = np.mean(params,axis=0)
+        v = np.zeros((nChange*2,tEnd))
+        h = np.zeros(nChange*2)
+        rt = np.full(nChange*2,np.nan)
+        for i,x in enumerate(X):
+            for j,s in enumerate(x):
+                v[i,j+1] = v[i,j] + s - lk*v[i,j]
+                if v[i,j+1] > th:
+                    h[i] = 1
+                    rt[i] = j+1
+        d[region]['integrator'] = v
+        d[region]['leak'] = lk
+        d[region]['threshold'] = th
+        d[region]['thresholdAbs'] = th*baseSpRate
+        d[region]['modelHit'] = h
+        d[region]['modelRespTime'] = rt
+        d[region]['modelAccuracy'] = sklearn.metrics.accuracy_score(y,h)
+
+    np.save(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_'+str(sessionId)+'.npy'),d)
+
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -380,4 +468,5 @@ if __name__ == "__main__":
     #decodeLicksFromFacemap(args.sessionId)
     #decodeLicksFromUnits(args.sessionId)
     #decodeChange(args.sessionId)
-    predictResposeTimesFromDecoder(args.sessionId)
+    #predictResponseTimesFromDecoder(args.sessionId)
+    predictResponseTimesFromIntegrator(args.sessionId)
