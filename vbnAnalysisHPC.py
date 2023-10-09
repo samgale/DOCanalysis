@@ -353,18 +353,20 @@ def predictResposeTimesFromDecoder(sessionId):
         if nUnits < minUnits:
             continue
         
+        X = np.concatenate([s[:,:,:decodeWindowEnd].sum(axis=-1).T for s in (changeSp,preChangeSp)])
+        d[region]['prediction'] = np.zeros(nChange*2)
         for trial in range(nChange):
             estimator = sklearn.base.clone(model)
-            X = np.concatenate([s[:,:,:decodeWindowEnd].sum(axis=-1).T for s in (changeSp,preChangeSp)])
             trainInd = [tr for tr in range(nChange*2) if tr not in (trial,trial+nChange)]
             estimator.fit(X[trainInd],y[trainInd])
             d[region]['trainAccuracy'].append(estimator.score(X[trainInd],y[trainInd]))
             d[region]['featureWeights'].append(estimator.coef_.squeeze())
-            d[region]['prediction'].append(estimator.predict(X[trial]))
+            d[region]['prediction'][[trial,trial+nChange]] = estimator.predict(X[[trial,trial+nChange]])
             d[region]['confidence'].append([])
             for winEnd in decodeWindows:
-                X = changeSp[:,trial,:winEnd].sum(axis=-1)
-                d[region]['confidence'][-1].append(estimator.decision_function(X))
+                trialX = changeSp[:,trial,:winEnd].sum(axis=-1).reshape(1,-1)
+                d[region]['confidence'][-1].append(estimator.decision_function(trialX)[0])
+        d[region]['accuracy'] = sklearn.metrics.accuracy_score(y,d[region]['prediction'])
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'decoderResponseTimes','decoderResponseTimes_'+str(sessionId)+'.npy'),d)
