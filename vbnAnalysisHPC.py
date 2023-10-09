@@ -310,7 +310,7 @@ def decodeChange(sessionId):
 def predictResposeTimesFromDecoder(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     minUnits = 20
-    decodeWindowSize = 10
+    decodeWindowSize = 1
     decodeWindowEnd = 100
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
