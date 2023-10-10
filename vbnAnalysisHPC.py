@@ -374,13 +374,13 @@ def predictResponseTimesFromDecoder(sessionId):
 
 
 def predictResponseTimesFromIntegrator(sessionId):
-    regions = ('VISp','VISam')
+    regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
     tEnd = 150
-    leak = np.arange(0,1.01,0.1)
-    threshold = np.arange(0.5,1.51,0.1)
+    leak = np.arange(0,1,0.1)
+    threshold = np.arange(0.5,2.5,0.1)
     fitParams = list(itertools.product(leak,threshold))
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -415,15 +415,14 @@ def predictResponseTimesFromIntegrator(sessionId):
         if nUnits < minUnits:
             continue
         
-        X = []
-        for s in (changeSp[hasResp],preChangeSp[hasResp]):
-            base = s[:,:,baseWin].mean()
-            X.append(s[:,:,1:tEnd].mean(axis=0) - base)
         X = np.concatenate([s[hasResp].mean(axis=0) for s in (changeSp,preChangeSp)])
-        baseSpRate = s[:,baseWin].mean()
+        baseSpRate = preChangeSp[hasResp,:,baseWin].mean()
         X -= baseSpRate
         X = X[:,1:tEnd]
-        X /= X.max()
+        maxSpRate = X.max()
+        X /= maxSpRate
+        d[region]['baseSpRate'] = baseSpRate*1000
+        d[region]['maxSpRate'] = maxSpRate*1000
 
         params = []
         for trial in range(nChange):
@@ -452,7 +451,6 @@ def predictResponseTimesFromIntegrator(sessionId):
         d[region]['integrator'] = v
         d[region]['leak'] = lk
         d[region]['threshold'] = th
-        d[region]['thresholdAbs'] = th*baseSpRate
         d[region]['modelHit'] = h
         d[region]['modelRespTime'] = rt
         d[region]['modelAccuracy'] = sklearn.metrics.accuracy_score(y,h)
