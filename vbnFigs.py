@@ -367,6 +367,169 @@ ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
 
+# response time prediction from decoder
+region = 'VISp'
+confFamiliar = []
+confNovel = []
+respRateFamiliar = []
+respRateNovel = []
+respTimeFamiliar = []
+respTimeNovel = []
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'decoderResponseTimes','decoderResponseTimes_*.npy'))):
+    print(i)
+    d = np.load(f,allow_pickle=True).item()
+    if len(d[region]['prediction']) > 0 and d['hit'].sum() >= 10:
+        novel = d['novelImage']
+        if novel.any():
+            hit = d[region]['prediction'][:novel.size].astype(bool)
+            conf = np.array(d[region]['confidence'])
+            confFamiliar.append(conf[hit & ~novel])
+            confNovel.append(conf[hit & novel])
+            respRateFamiliar.append(np.sum(hit[~novel])/np.sum(~novel))
+            respRateNovel.append(np.sum(hit[novel])/np.sum(novel))
+            t = d['decodeWindows']
+            respTimeFamiliar.append(np.array([t[np.where(c>0)[0][0]] for c in confFamiliar[-1]]))
+            respTimeNovel.append(np.array([t[np.where(c>0)[0][0]] for c in confNovel[-1]]))
+
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.plot([0,t[-1]],[0,0],'k--')
+for conf,clr,lbl in zip((confFamiliar,confNovel),'gm',('familiar','novel')):
+    a = [c.mean(axis=0) for c in conf]
+    m = np.mean(a,axis=0)
+    s = np.std(a,axis=0)/(len(a)**0.5)
+    ax.plot(t,m,color=clr,label=lbl)
+    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('Time from change (ms)')
+ax.set_ylabel('Decoder confidence')
+ax.legend(loc='upper left')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for f,n in zip(respRateFamiliar,respRateNovel):
+    ax.plot([0,1],[f,n],'k',alpha=0.1)
+ax.plot([0,1],[np.mean(respRateFamiliar),np.mean(respRateNovel)],'ko-',ms=10,lw=2)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks([0,1])
+ax.set_xticklabels(('Familiar','Novel'))
+ax.set_xlim([-0.25,1.25])
+ax.set_ylim([0,1])
+ax.set_ylabel('Response rate')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+rtFamiliar,rtNovel = [[np.mean(rt) for rt in respTime] for respTime in (respTimeFamiliar,respTimeNovel)]
+for f,n in zip(rtFamiliar,rtNovel):
+    ax.plot([0,1],[f,n],'k',alpha=0.1)
+ax.plot([0,1],[np.mean(rtFamiliar),np.mean(rtNovel)],'ko-',ms=10,lw=2)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks([0,1])
+ax.set_xticklabels(('Familiar','Novel'))
+ax.set_xlim([-0.25,1.25])
+ax.set_ylim([50,150])
+ax.set_ylabel('Response time (ms)')
+plt.tight_layout()
+
+
+# response time prediction from integrator
+region = 'VISp'
+t = np.arange(150)
+threshold = []
+leak = []
+integratorFamiliar = []
+integratorNovel = []
+respRateFamiliar = []
+respRateNovel = []
+respTimeFamiliar = []
+respTimeNovel = []
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.npy'))):
+    print(i)
+    d = np.load(f,allow_pickle=True).item()
+    if len(d[region]) > 0 and d['hit'].sum() >= 10:
+        novel = d['novelImage']
+        if novel.any():
+            hit = d[region]['modelHit'][:novel.size].astype(bool)
+            rt = d[region]['modelRespTime'][:novel.size]
+            threshold.append(d[region]['threshold'])
+            leak.append(d[region]['leak'])
+            integrator = np.array(d[region]['integrator'])[:novel.size]
+            integratorFamiliar.append(integrator[hit & ~novel])
+            integratorNovel.append(integrator[hit & novel])
+            respRateFamiliar.append(np.sum(hit[~novel])/np.sum(~novel))
+            respRateNovel.append(np.sum(hit[novel])/np.sum(novel))
+            respTimeFamiliar.append(rt[hit & ~novel])
+            respTimeNovel.append(rt[hit & novel])
+
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+m = np.mean(threshold,axis=0)
+s = np.std(threshold,axis=0)/(len(threshold)**0.5)
+ax.plot(t[[0,-1]],[m,m],'k--')
+ax.fill_between(t[[0,-1]],[m+s]*2,[m-s]*2,color='k',alpha=0.25)
+for intg,clr,lbl in zip((integratorFamiliar,integratorNovel),'gm',('familiar','novel')):
+    a = [ig.mean(axis=0) for ig in intg]
+    m = np.nanmean(a,axis=0)
+    s = np.nanstd(a,axis=0)/(len(a)**0.5)
+    ax.plot(t,m,color=clr,label=lbl)
+    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('Time from change (ms)')
+ax.set_ylabel('Decision variable')
+ax.legend(loc='upper left')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for f,n in zip(respRateFamiliar,respRateNovel):
+    ax.plot([0,1],[f,n],'k',alpha=0.1)
+ax.plot([0,1],[np.mean(respRateFamiliar),np.mean(respRateNovel)],'ko-',ms=10,lw=2)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks([0,1])
+ax.set_xticklabels(('Familiar','Novel'))
+ax.set_xlim([-0.25,1.25])
+ax.set_ylim([0,1])
+ax.set_ylabel('Response rate')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+rtFamiliar,rtNovel = [[np.mean(rt) for rt in respTime] for respTime in (respTimeFamiliar,respTimeNovel)]
+for f,n in zip(rtFamiliar,rtNovel):
+    ax.plot([0,1],[f,n],'k',alpha=0.1)
+ax.plot([0,1],[np.mean(rtFamiliar),np.mean(rtNovel)],'ko-',ms=10,lw=2)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks([0,1])
+ax.set_xticklabels(('Familiar','Novel'))
+ax.set_xlim([-0.25,1.25])
+ax.set_ylim([50,150])
+ax.set_ylabel('Response time (ms)')
+plt.tight_layout()
+
+
+
+
+
+
+
+
+
 
 
 
