@@ -46,6 +46,9 @@ def getBehavData(stim):
                                 (~stim['previous_omitted']) & 
                                 (stim['flashes_since_change']>5) &
                                 (stim['flashes_since_last_lick']>1))
+    novelFlashes = stim['novel_image']
+    novelFlashes[novelFlashes.isnull()] = False
+    novelFlashes = np.array(novelFlashes).astype(bool) & engaged
     lick = np.array(stim['lick_for_flash'])
     lickTimes = np.array(stim['lick_time'])
     lickLatency = lickTimes - flashTimes
@@ -53,7 +56,7 @@ def getBehavData(stim):
     lateLick = lickLatency > 0.75
     lick[earlyLick | lateLick] = False
     lickTimes[earlyLick | lateLick] = np.nan
-    return flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes
+    return flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes
 
 
 def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):

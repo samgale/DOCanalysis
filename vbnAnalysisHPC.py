@@ -102,7 +102,7 @@ def decodeLicksFromFacemap(sessionId):
     decodeWindows = np.arange(decodeWindowStart,decodeWindowEnd+frameInterval/2,frameInterval)
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     flashTimes = flashTimes[nonChangeFlashes]
     lick = lick[nonChangeFlashes]
     
@@ -160,7 +160,7 @@ def decodeLicksFromUnits(sessionId):
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     
     d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
          for sampleSize in unitSampleSize} for region in regions}
@@ -243,7 +243,7 @@ def decodeChange(sessionId):
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     nChange = changeFlashes.sum()
     
     d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','prediction','confidence')}
@@ -324,7 +324,7 @@ def predictResponseTimesFromDecoder(sessionId):
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     preChangeFlashes = np.where(changeFlashes)[0]-1
     nChange = changeFlashes.sum()
     
@@ -335,7 +335,7 @@ def predictResponseTimesFromDecoder(sessionId):
     d['hit'] = np.array(stim['hit'])[changeFlashes]
     d['preChangeImage'] = np.array(stim['initial_image_name'])[changeFlashes]
     d['changeImage'] = np.array(stim['change_image_name'])[changeFlashes]
-    d['novelImage'] = np.array(stim['novel_image']).astype(bool)[changeFlashes]
+    d['novelImage'] = novelFlashes[changeFlashes]
     y = np.zeros(nChange*2)
     y[:nChange] = 1
     warnings.filterwarnings('ignore')
@@ -388,7 +388,7 @@ def predictResponseTimesFromIntegrator(sessionId):
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     preChangeFlashes = np.where(changeFlashes)[0]-1
     nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
@@ -401,13 +401,13 @@ def predictResponseTimesFromIntegrator(sessionId):
     d['nonChange'] = nonChangeFlashes
     d['omitted'] = omittedFlashes
     d['prevOmitted'] = prevOmittedFlashes
+    d['novel'] = novelFlashes
     d['lick'] = lick
-    d['lickTimes'] = lickTimes
+    d['lickLatency'] = lickTimes - flashTimes
     d['hit'] = np.array(stim['hit'])
     d['falseAlarm'] = np.array(stim['false_alarm'])
     d['preChangeImage'] = np.array(stim['initial_image_name'])
     d['changeImage'] = np.array(stim['change_image_name'])
-    d['novelImage'] = np.array(stim['novel_image']).astype(bool)
     y = np.zeros(nChange*2)
     y[:nChange] = 1
     for region in regions:
