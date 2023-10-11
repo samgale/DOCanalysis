@@ -5,6 +5,7 @@ Created on Thu Sep 28 10:06:06 2023
 @author: svc_ccg
 """
 
+import copy
 import glob
 import os
 import numpy as np
@@ -442,33 +443,78 @@ plt.tight_layout()
 
 
 # response time prediction from integrator
-region = 'VISp'
+filePaths = glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.hdf5'))
+regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
+imgLabels = ('familiar','familiarNovel','novel')
 t = np.arange(150)
-threshold = []
+
+novelSession = []
+respMice = {lbl: [] for lbl in imgLabels}
+respTimeMice = copy.deepcopy(respMice)
+leak = {region: [] for region in regions}
+threshold = copy.deepcopy(leak)
+baseSpikeRate = copy.deepcopy(leak)
+maxSpikeRate = copy.deepcopy(leak)
+spikeRate = {region: {lbl: [] for lbl in imgLabels} for region in regions}
+integrator = copy.deepcopy(spikeRate)
+respModel = copy.deepcopy(spikeRate)
+respTimeModel = copy.deepcopy(spikeRate)
+
+for f in filePaths[:10]:
+    with h5py.File(f,'r') as d:
+        change = d['change'][()]
+        novel = d['novel'][()]
+        novelSession.append(novel.any())
+        if novelSession[-1]:
+            inds = ((~novel & change),(novel & change))
+            lbls = imgLabels[1:]
+        else:
+            inds = (change,)
+            lbls = (imgLabels[0],)
+        for ind,lbl in zip(inds,lbls):
+            respMice[lbl].append(d['hit'][ind])
+            # respTimeMice[lbl].append(d['lickLatency'][ind])
+        for region in regions:
+            leak[region].append(d[region]['leak'][()])
+            threshold[region].append(d[region]['threshold'][()])
+            baseSpikeRate[region].append(d[region]['baseSpikeRate'][()])
+            maxSpikeRate[region].append(d[region]['maxSpikeRate'][()])
+            for ind,lbl in zip(inds,lbls):
+                spikeRate[region][lbl].append(d[region]['spikeRate'][ind].mean(axis=0))
+                integrator[region][lbl].append(d[region]['integrator'][ind].mean(axis=0))
+                respModel[region][lbl].append(d[region]['modelResp'][ind])
+                respTimeModel[region][lbl].append(d[region]['modelRespTime'][ind])
+
+
+#
+region = 'VISam'
+t = np.arange(150)
 leak = []
+threshold = []
 integratorFamiliar = []
 integratorNovel = []
 respRateFamiliar = []
 respRateNovel = []
 respTimeFamiliar = []
 respTimeNovel = []
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.npy'))):
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.hdf5'))):
     print(i)
-    d = np.load(f,allow_pickle=True).item()
+    d = h5py.File(f,'r')
     if len(d[region]) > 0 and d['hit'].sum() >= 10:
-        novel = d['novelImage']
+        change = d['change']
+        novel = d['novelImage'][change]
         if novel.any():
-            hit = d[region]['modelHit'][:novel.size].astype(bool)
-            rt = d[region]['modelRespTime'][:novel.size]
+            resp = d[region]['modelResp'][change].astype(bool)
+            rt = d[region]['modelRespTime'][change]
             threshold.append(d[region]['threshold'])
             leak.append(d[region]['leak'])
-            integrator = np.array(d[region]['integrator'])[:novel.size]
-            integratorFamiliar.append(integrator[hit & ~novel])
-            integratorNovel.append(integrator[hit & novel])
-            respRateFamiliar.append(np.sum(hit[~novel])/np.sum(~novel))
-            respRateNovel.append(np.sum(hit[novel])/np.sum(novel))
-            respTimeFamiliar.append(rt[hit & ~novel])
-            respTimeNovel.append(rt[hit & novel])
+            integrator = np.array(d[region]['integrator'])[change]
+            integratorFamiliar.append(integrator[resp & ~novel])
+            integratorNovel.append(integrator[resp & novel])
+            respRateFamiliar.append(np.sum(resp[~novel])/np.sum(~novel))
+            respRateNovel.append(np.sum(resp[novel])/np.sum(novel))
+            respTimeFamiliar.append(rt[resp & ~novel])
+            respTimeNovel.append(rt[resp & novel])
 
 
 fig = plt.figure()
