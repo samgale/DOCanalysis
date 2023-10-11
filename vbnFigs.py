@@ -445,133 +445,267 @@ plt.tight_layout()
 # response time prediction from integrator
 filePaths = glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.hdf5'))
 regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
-imgLabels = ('familiar','familiarNovel','novel')
+imageTypeLabels = ('familiar','familiarNovel','novel')
+imageTypeColors = 'kgm'
 t = np.arange(150)
 
 novelSession = []
-respMice = {lbl: [] for lbl in imgLabels}
+respMice = {lbl: [] for lbl in imageTypeLabels}
 respTimeMice = copy.deepcopy(respMice)
 leak = {region: [] for region in regions}
 threshold = copy.deepcopy(leak)
 baseSpikeRate = copy.deepcopy(leak)
 maxSpikeRate = copy.deepcopy(leak)
-spikeRate = {region: {lbl: [] for lbl in imgLabels} for region in regions}
+spikeRate = {region: {lbl: [] for lbl in imageTypeLabels} for region in regions}
 integrator = copy.deepcopy(spikeRate)
 respModel = copy.deepcopy(spikeRate)
 respTimeModel = copy.deepcopy(spikeRate)
 
-for f in filePaths[:10]:
+for i,f in enumerate(filePaths):
+    print(i)
     with h5py.File(f,'r') as d:
         change = d['change'][()]
         novel = d['novel'][()]
         novelSession.append(novel.any())
         if novelSession[-1]:
             inds = ((~novel & change),(novel & change))
-            lbls = imgLabels[1:]
+            lbls = imageTypeLabels[1:]
         else:
             inds = (change,)
-            lbls = (imgLabels[0],)
+            lbls = (imageTypeLabels[0],)
         for ind,lbl in zip(inds,lbls):
             respMice[lbl].append(d['hit'][ind])
-            # respTimeMice[lbl].append(d['lickLatency'][ind])
+            respTimeMice[lbl].append(d['lickLatency'][ind])
         for region in regions:
-            leak[region].append(d[region]['leak'][()])
-            threshold[region].append(d[region]['threshold'][()])
-            baseSpikeRate[region].append(d[region]['baseSpikeRate'][()])
-            maxSpikeRate[region].append(d[region]['maxSpikeRate'][()])
-            for ind,lbl in zip(inds,lbls):
-                spikeRate[region][lbl].append(d[region]['spikeRate'][ind].mean(axis=0))
-                integrator[region][lbl].append(d[region]['integrator'][ind].mean(axis=0))
-                respModel[region][lbl].append(d[region]['modelResp'][ind])
-                respTimeModel[region][lbl].append(d[region]['modelRespTime'][ind])
+            if len(d[region]) > 0:
+                leak[region].append(d[region]['leak'][()])
+                threshold[region].append(d[region]['threshold'][()])
+                baseSpikeRate[region].append(d[region]['baseSpikeRate'][()])
+                maxSpikeRate[region].append(d[region]['maxSpikeRate'][()])
+                spRate = d[region]['spikeRate'][()]
+                intg = d[region]['integrator'][()]
+                r = d[region]['modelResp'][()]
+                rt = d[region]['modelRespTime'][()]
+                for ind,lbl in zip(inds,lbls):
+                    spikeRate[region][lbl].append(spRate[ind].mean(axis=0))
+                    integrator[region][lbl].append(intg[ind].mean(axis=0))
+                    respModel[region][lbl].append(r[ind])
+                    respTimeModel[region][lbl].append(rt[ind])
+            else:
+                leak[region].append(np.nan)
+                threshold[region].append(np.nan)
+                baseSpikeRate[region].append(np.nan)
+                maxSpikeRate[region].append(np.nan)
+                for ind,lbl in zip(inds,lbls):
+                    spikeRate[region][lbl].append(np.full(t.size-1,np.nan))
+                    integrator[region][lbl].append(np.full(t.size,np.nan))
+                    respModel[region][lbl].append(np.array([]))
+                    respTimeModel[region][lbl].append(np.array([]))
 
 
-#
-region = 'VISam'
-t = np.arange(150)
-leak = []
-threshold = []
-integratorFamiliar = []
-integratorNovel = []
-respRateFamiliar = []
-respRateNovel = []
-respTimeFamiliar = []
-respTimeNovel = []
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.hdf5'))):
-    print(i)
-    d = h5py.File(f,'r')
-    if len(d[region]) > 0 and d['hit'].sum() >= 10:
-        change = d['change']
-        novel = d['novelImage'][change]
-        if novel.any():
-            resp = d[region]['modelResp'][change].astype(bool)
-            rt = d[region]['modelRespTime'][change]
-            threshold.append(d[region]['threshold'])
-            leak.append(d[region]['leak'])
-            integrator = np.array(d[region]['integrator'])[change]
-            integratorFamiliar.append(integrator[resp & ~novel])
-            integratorNovel.append(integrator[resp & novel])
-            respRateFamiliar.append(np.sum(resp[~novel])/np.sum(~novel))
-            respRateNovel.append(np.sum(resp[novel])/np.sum(novel))
-            respTimeFamiliar.append(rt[resp & ~novel])
-            respTimeNovel.append(rt[resp & novel])
-
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-m = np.mean(threshold,axis=0)
-s = np.std(threshold,axis=0)/(len(threshold)**0.5)
-ax.plot(t[[0,-1]],[m,m],'k--')
-ax.fill_between(t[[0,-1]],[m+s]*2,[m-s]*2,color='k',alpha=0.25)
-for intg,clr,lbl in zip((integratorFamiliar,integratorNovel),'gm',('familiar','novel')):
-    a = [ig.mean(axis=0) for ig in intg]
-    m = np.nanmean(a,axis=0)
-    s = np.nanstd(a,axis=0)/(len(a)**0.5)
-    ax.plot(t,m,color=clr,label=lbl)
-    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('Time from change (ms)')
-ax.set_ylabel('Decision variable')
-ax.legend(loc='upper left')
+# plot mean spike rate
+fig = plt.figure(figsize=(8,8))
+for i,region in enumerate(regions):
+    ax = fig.add_subplot(len(regions),1,i+1)
+    for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+        d = np.array(spikeRate[region][lbl])
+        m = np.nanmean(d,axis=0)
+        n = np.sum(~np.isnan(d[:,0]))
+        s = np.nanstd(d,axis=0)/(n**0.5)
+        ax.plot(t[1:],m,color=clr,label=lbl+' (n='+str(n)+')')
+        ax.fill_between(t[1:],m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,t[-1]])
+    if i==len(regions)-1:
+        ax.set_xlabel('Time from change (ms)')
+    else:
+        ax.set_xticklabels([])
+    ax.set_ylabel('Spikes/s')
+    ax.set_title(region)
+    if i==0:
+        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
+# plot mouse response rate and latency
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-for f,n in zip(respRateFamiliar,respRateNovel):
-    ax.plot([0,1],[f,n],'k',alpha=0.1)
-ax.plot([0,1],[np.mean(respRateFamiliar),np.mean(respRateNovel)],'ko-',ms=10,lw=2)
+xticks = np.arange(3)
+mean = []
+sem = []
+nMice = []
+for lbl in imageTypeLabels:
+    d = [r.sum()/r.size for r in respMice[lbl]]
+    mean.append(np.mean(d))
+    nMice.append(len(d))
+    sem.append(np.std(d)/(len(d)**0.5))
+ax.plot(xticks,mean,'ko',ms=10)
+for x,m,s in zip(xticks,mean,sem):
+    ax.plot([x,x],[m-s,m+s],'k')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks([0,1])
-ax.set_xticklabels(('Familiar','Novel'))
-ax.set_xlim([-0.25,1.25])
+ax.set_xticks(xticks)
+ax.set_xticklabels([lbl+'\n'+'n='+str(n) for lbl,n in zip(imageTypeLabels,nMice)])
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
 ax.set_ylim([0,1])
 ax.set_ylabel('Response rate')
+ax.set_title('Mice')
 plt.tight_layout()
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-rtFamiliar,rtNovel = [[np.mean(rt) for rt in respTime] for respTime in (respTimeFamiliar,respTimeNovel)]
-for f,n in zip(rtFamiliar,rtNovel):
-    ax.plot([0,1],[f,n],'k',alpha=0.1)
-ax.plot([0,1],[np.mean(rtFamiliar),np.mean(rtNovel)],'ko-',ms=10,lw=2)
+mean = []
+sem = []
+nMice = []
+for lbl in imageTypeLabels:
+    d = [np.nanmean(r)*1000 for r in respTimeMice[lbl]]
+    mean.append(np.mean(d))
+    nMice.append(len(d))
+    sem.append(np.std(d)/(len(d)**0.5))
+ax.plot(xticks,mean,'ko',ms=10)
+for x,m,s in zip(xticks,mean,sem):
+    ax.plot([x,x],[m-s,m+s],'k')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks([0,1])
-ax.set_xticklabels(('Familiar','Novel'))
-ax.set_xlim([-0.25,1.25])
-ax.set_ylim([50,150])
+ax.set_xticks(xticks)
+ax.set_xticklabels([lbl+'\n'+'n='+str(n) for lbl,n in zip(imageTypeLabels,nMice)])
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
 ax.set_ylabel('Response time (ms)')
+ax.set_title('Mice')
 plt.tight_layout()
 
 
+# plot integrator value
+fig = plt.figure(figsize=(8,8))
+for i,region in enumerate(regions):
+    ax = fig.add_subplot(len(regions),1,i+1)
+    for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+        d = np.array(integrator[region][lbl])
+        novel = np.array(novelSession)
+        ind = novel if 'ovel' in lbl else ~novel
+        d /= np.array(threshold[region])[ind,None]
+        m = np.nanmean(d,axis=0)
+        n = np.sum(~np.isnan(d[:,0]))
+        s = np.nanstd(d,axis=0)/(n**0.5)
+        ax.plot(t,m,color=clr,label=lbl+' (n='+str(n)+')')
+        ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,t[-1]])
+    if i==len(regions)-1:
+        ax.set_xlabel('Time from change (ms)')
+    else:
+        ax.set_xticklabels([])
+    if i==len(regions)//2-1:
+        ax.set_ylabel('Decision variable relative to threshold')
+    ax.set_title(region)
+    if i==0:
+        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
+
+# plot model response rate and decision time
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+xticks = np.arange(len(regions))
+for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+    mean = []
+    sem = []
+    for region in regions:
+        d = [r.sum()/r.size for r in respModel[region][lbl] if len(r)>0]
+        mean.append(np.mean(d))
+        sem.append(np.std(d)/(len(d)**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(regions)
+ax.set_xlim([xticks[0]-0.5,xticks[-1]+0.5])
+ax.set_ylim([0,1])
+ax.set_ylabel('Response rate')
+ax.set_title('Model')
+ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
+
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+    mean = []
+    sem = []
+    for region in regions:
+        d = [np.nanmean(r) for r in respTimeModel[region][lbl] if len(r)>0]
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(len(d)**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(regions)
+ax.set_xlim([xticks[0]-0.5,xticks[-1]+0.5])
+ax.set_ylabel('Decision time (ms)')
+ax.set_title('Model')
+ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
 
 
+# plot threshold and leak
+novel = np.array(novelSession)
 
+fig = plt.figure(figsize=(8,8))
+for i,region in enumerate(regions):
+    ax = fig.add_subplot(len(regions),1,i+1)
+    for ind,clr,lbl in zip((~novel,novel),'gm',('familiar-only sessions','novel sessions')):
+        thresh = np.array(threshold[region])[ind] 
+        thresh *= np.array(maxSpikeRate[region])[ind]
+        dsort = np.sort(thresh[~np.isnan(thresh)])
+        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+        ax.plot(dsort,cumProb,color=clr,label=lbl)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([0,1.01])
+    if i==len(regions)-1:
+        ax.set_xlabel('Integrator threshold (input spikes/s)')
+    else:
+        ax.set_xticklabels([])
+    if i==len(regions)//2-1:
+        ax.set_ylabel('Cumulative probability')
+    ax.set_title(region)
+    if i==0:
+        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
+
+fig = plt.figure(figsize=(8,8))
+for i,region in enumerate(regions):
+    ax = fig.add_subplot(len(regions),1,i+1)
+    for ind,clr,lbl in zip((~novel,novel),'gm',('familiar-only sessions','novel sessions')):
+        lk = np.array(leak[region])[ind]
+        dsort = np.sort(lk[~np.isnan(lk)])
+        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+        ax.plot(dsort,cumProb,color=clr,label=lbl)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([0,1.01])
+    if i==len(regions)-1:
+        ax.set_xlabel('Integrator leak')
+    else:
+        ax.set_xticklabels([])
+    if i==len(regions)//2-1:
+        ax.set_ylabel('Cumulative probability')
+    ax.set_title(region)
+    if i==0:
+        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
 
 
 
