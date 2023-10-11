@@ -11,6 +11,14 @@ import scipy.stats
 import sklearn
 
 
+def dictToHdf5(group,d):
+    for key,val in d.items():
+        if isinstance(val,dict): 
+            dictToHdf5(group.create_group(key),val)
+        else:
+            group.create_dataset(key,data=val)
+
+
 def findNearest(array,values):
     ind = np.searchsorted(array,values,side='left')
     for i,j in enumerate(ind):
@@ -27,6 +35,11 @@ def getBehavData(stim):
     engaged = np.array([np.sum(hit[stim['is_change']][(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
     changeFlashes = np.array(stim['is_change'] & ~autoRewarded & engaged)
+    catchFlashes = stim['catch']
+    catchFlashes[catchFlashes.isnull()] = False
+    catchFlashes = np.array(catchFlashes).astype(bool) & engaged
+    omittedFlashes = np.array(stim['omitted']) & engaged
+    prevOmittedFlashes = np.array(stim['previous_omitted']) & engaged
     nonChangeFlashes = np.array(engaged &
                                 (~stim['is_change']) & 
                                 (~stim['omitted']) & 
@@ -38,8 +51,9 @@ def getBehavData(stim):
     lickLatency = lickTimes - flashTimes
     earlyLick = lickLatency < 0.15
     lateLick = lickLatency > 0.75
-    nonChangeFlashes[earlyLick | lateLick] = False
-    return flashTimes, changeFlashes, nonChangeFlashes, lick, lickTimes, hit
+    lick[earlyLick | lateLick] = False
+    lickTimes[earlyLick | lateLick] = np.nan
+    return flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,lick,lickTimes
 
 
 def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
