@@ -380,11 +380,12 @@ def predictResponseTimesFromIntegrator(sessionId):
     baseWin = slice(680,750)
     respWin = slice(30,100)
     tEnd = 150
-    leakRange= np.arange(0,1,0.05)
-    thresholdRange = np.arange(0.5,2.5,0.1)
+    leakRange= np.arange(0.01,0.3,0.01)
+    thresholdRange = np.arange(0.5,3,0.1)
     params = list(itertools.product(leakRange,thresholdRange))
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    rsUnits = np.array(units['waveform_duration'] > 0.4)
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
@@ -411,10 +412,10 @@ def predictResponseTimesFromIntegrator(sessionId):
     y = np.zeros(nChange*2)
     y[:nChange] = 1
     for region in regions:
-        inRegion = np.in1d(units['structure_acronym'],region)
+        inRegion = np.in1d(units['structure_acronym'],region) & rsUnits
         if not any(inRegion):
             continue
-                
+        
         sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
         for i,u in enumerate(np.where(inRegion)[0]):
             sp[i]=spikes[u,:,:]
