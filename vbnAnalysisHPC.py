@@ -6,7 +6,6 @@ Created on Wed Oct 19 14:37:16 2022
 """
 
 import argparse
-import itertools
 import math
 import os
 import warnings
@@ -375,14 +374,14 @@ def predictResponseTimesFromDecoder(sessionId):
 
 
 def predictResponseTimesFromIntegrator(sessionId):
-    regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
+    regions = (('VISp','VISl','VISrl','VISal','VISpm','VISam'),'LGd','VISp','VISl','VISrl','VISal','VISpm','VISam')
+    nCrossVal = 5
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
     tEnd = 150
-    leakRange= np.arange(0.01,0.3,0.01)
+    leakRange= np.arange(0,0.25,0.01)
     thresholdRange = np.arange(0.5,3,0.1)
-    params = list(itertools.product(leakRange,thresholdRange))
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     rsUnits = np.array(units['waveform_duration'] > 0.4)
@@ -390,14 +389,18 @@ def predictResponseTimesFromIntegrator(sessionId):
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-    preChangeFlashes = np.where(changeFlashes)[0]-1
+    preChangeFlashes = np.concatenate((changeFlashes[1:],[False]))
     nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
     
     d = {region: {} for region in regions}
+    d['leakRange'] = leakRange
+    d['thresholdRange'] = thresholdRange
     d['sessionId'] = sessionId
     d['regions'] = regions
+    d['imageName'] = np.array(stim['image_name'])
     d['change'] = changeFlashes
+    d['preChange'] = preChangeFlashes
     d['catch'] = catchFlashes
     d['nonChange'] = nonChangeFlashes
     d['omitted'] = omittedFlashes
@@ -407,8 +410,7 @@ def predictResponseTimesFromIntegrator(sessionId):
     d['lickLatency'] = lickTimes - flashTimes
     d['hit'] = np.array(stim['hit'])
     d['falseAlarm'] = np.array(stim['false_alarm'])
-    d['preChangeImage'] = np.array(stim['initial_image_name'])
-    d['changeImage'] = np.array(stim['change_image_name'])
+
     y = np.zeros(nChange*2)
     y[:nChange] = 1
     for region in regions:
@@ -432,30 +434,58 @@ def predictResponseTimesFromIntegrator(sessionId):
         baseSpRate[1:] = baseSpRate[:-1]
         flashSp -= baseSpRate[:,None]
         flashSp = flashSp[:,1:tEnd]
+        maxSpRate = flashSp[changeFlashes | preChangeFlashes].max()
         d[region]['spikeRate'] = flashSp*1000
-        
-        X = np.concatenate((flashSp[changeFlashes],flashSp[preChangeFlashes]))
-        maxSpRate = X.max()
-        X /= maxSpRate
         d[region]['baseSpikeRate'] = baseSpRate[changeFlashes].mean()*1000
         d[region]['maxSpikeRate'] = maxSpRate*1000
-        fitParams = []
-        for trial in range(nChange):
-            trainInd = [tr for tr in range(nChange*2) if tr not in (trial,trial+nChange)]
-            logLoss = []
-            for leak,thresh in params:
-                prediction = np.zeros(nChange*2-2)
-                for i,trialSp in enumerate(X[trainInd]):
-                    v = 0
-                    for s in trialSp:
-                        v += s - leak*v
-                        if v > thresh:
-                            prediction[i] = 1
-                logLoss.append(sklearn.metrics.log_loss(y[trainInd],prediction))
-            fitParams.append(params[np.argmin(logLoss)])
-        
-        leak,thresh = np.mean(fitParams,axis=0)
         flashSp /= maxSpRate
+        
+        X = np.concatenate((flashSp[changeFlashes],flashSp[preChangeFlashes]))
+        leakFit = np.zeros(nCrossVal)
+        thresholdFit = np.zeros(nCrossVal)
+        trainAccuracy = np.zeros((nCrossVal,leakRange.size,thresholdRange.size))
+        shuffleInd = np.random.permutation(len(y))
+        n = round(nChange/nCrossVal) # samples per class per split
+        integrator = np.zeros((nCrossVal,nFlash,tEnd))
+        modelResp = np.zeros(nCrossVal,nFlash)
+        modelRespTime = np.full((nCrossVal,nFlash),np.nan)
+        for k in range(nCrossVal):
+            testInd = []
+            for val in (0,1):
+                i = k*n
+                ind = shuffleInd[y[shuffleInd]==val]
+                testInd.extend(ind[i:i+n] if k<nCrossVal-1 else ind[i:])
+            trainInd = np.setdiff1d(shuffleInd,testInd)
+            for i,leak in enumrate(leakRange):
+                for j,thresh in enumerate(thresholdRange):
+                    prediction = np.zeros(len(trainInd))
+                    for trial,trialSp in enumerate(X[trainInd]):
+                        v = 0
+                        for s in trialSp:
+                            v += s - leak*v
+                            if v > thresh:
+                                prediction[trial] = 1
+                                break
+                    trainAccuracy[k,i,j] = sklearn.metrics.accuracy_score(y[trainInd],prediction)
+            i,j = np.unravel_index(np.argmin(trainAccuracy[trial]),trainAccuracy[trial].shape)
+            leakFit[k] = leakRange[i]
+            thresholdFit[k] = thresholdRange[j]
+
+            trainFlashes = np.concatenate((np.where(changeFlashes)[0],np.where(preChangeFlashes)[0]))[trainInd]
+            for i,trialSp in enumerate(flashSp):
+                if i not in trainFlashes:
+                    for j,s in enumerate(trialSp):
+                        integrator[k,i,j+1] = integrator[k,i,j] + s - leak*integrator[k,i,j]
+                        if integrator[k,i,j+1] > thresh:
+                            modelResp[k,i] = 1
+                            modelRespTime[k,i] = j+1
+        
+        leak = np.mean(leakFit)
+        thresh = np.mean(threshFit)
+        d[region]['leak'] = leak
+        d[region]['threshold'] = thresh
+        d[region]['logLoss'] = np.mean(logLoss,axis=0)
+
         v = np.zeros((nFlash,tEnd))
         resp = np.zeros(nFlash)
         respTime = np.full(nFlash,np.nan)
@@ -465,8 +495,6 @@ def predictResponseTimesFromIntegrator(sessionId):
                 if v[i,j+1] > thresh:
                     resp[i] = 1
                     respTime[i] = j+1
-        d[region]['leak'] = leak
-        d[region]['threshold'] = thresh
         d[region]['integrator'] = v
         d[region]['modelResp'] = resp
         d[region]['modelRespTime'] = respTime
