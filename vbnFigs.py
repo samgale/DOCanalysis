@@ -31,7 +31,7 @@ nFlashes = []
 nLicks = []
 for sessionId in sessionIds:
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,nonChangeFlashes,lick,lickTimes,hit = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     nFlashes.append(nonChangeFlashes.sum())
     nLicks.append(lick[nonChangeFlashes].sum())
 nFlashes = np.array(nFlashes)
@@ -86,7 +86,7 @@ lickLatTime = lickLatBins[:-1]+0.5/60
 cumProbLick = []
 for sessionId in sessionIds:
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
-    flashTimes,changeFlashes,nonChangeFlashes,lick,lickTimes,hit = getBehavData(stim)
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     if lick[nonChangeFlashes].sum() >= 10:
         lickLatency = (lickTimes - flashTimes)[nonChangeFlashes & lick]
         dsort = np.sort(lickLatency)
@@ -340,14 +340,11 @@ mbReg = ('SCig','SCiw')
 mbLbl = 'SC'
 # mbReg = 'MRN'
 # mbLbl = 'MRN'
-for d,t,clr,lbl in zip((cumProbLick,facemapLickDecoding,unitLickDecoding[mbReg],
-                        changeDecodingCorr[mbReg],unitChangeDecoding[mbReg],
-                        unitChangeDecoding['VISam'],unitChangeDecoding['VISp']),
-                       (lickLatTime,facemapDecodingTime)+(unitDecodingTime,)*4,
-                       ('k','g','c','m','b','r'),
-                       ('lick prob','lick decoding (face motion, non-change flashes)','lick decoding ('+mbLbl+' units, non-change flashes)',
-                        'change decoder corrleation with behavior ('+mbLbl+' units)','change decoding ('+mbLbl+' units)',
-                        'change decoding (V1 units)')):
+for d,t,clr,lbl in zip((cumProbLick,facemapLickDecoding,unitLickDecoding[mbReg],unitChangeDecoding['VISp']),
+                       (lickLatTime,facemapDecodingTime)+(unitDecodingTime,)*2,
+                       ('k','r','b','g'),
+                       ('lick prob','lick decoding (face motion, non-change flashes)',
+                        'lick decoding ('+mbLbl+' units, non-change flashes)','change decoding (V1 units)')):
     m = np.mean(d,axis=0)
     m -= m[0]
     scale = 1/m[-1]
@@ -368,82 +365,8 @@ ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
 
-# response time prediction from decoder
-region = 'VISp'
-confFamiliar = []
-confNovel = []
-respRateFamiliar = []
-respRateNovel = []
-respTimeFamiliar = []
-respTimeNovel = []
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'decoderResponseTimes','decoderResponseTimes_*.npy'))):
-    print(i)
-    d = np.load(f,allow_pickle=True).item()
-    if len(d[region]['prediction']) > 0 and d['hit'].sum() >= 10:
-        novel = d['novelImage']
-        if novel.any():
-            hit = d[region]['prediction'][:novel.size].astype(bool)
-            conf = np.array(d[region]['confidence'])
-            confFamiliar.append(conf[hit & ~novel])
-            confNovel.append(conf[hit & novel])
-            respRateFamiliar.append(np.sum(hit[~novel])/np.sum(~novel))
-            respRateNovel.append(np.sum(hit[novel])/np.sum(novel))
-            t = d['decodeWindows']
-            respTimeFamiliar.append(np.array([t[np.where(c>0)[0][0]] for c in confFamiliar[-1]]))
-            respTimeNovel.append(np.array([t[np.where(c>0)[0][0]] for c in confNovel[-1]]))
-
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-ax.plot([0,t[-1]],[0,0],'k--')
-for conf,clr,lbl in zip((confFamiliar,confNovel),'gm',('familiar','novel')):
-    a = [c.mean(axis=0) for c in conf]
-    m = np.mean(a,axis=0)
-    s = np.std(a,axis=0)/(len(a)**0.5)
-    ax.plot(t,m,color=clr,label=lbl)
-    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('Time from change (ms)')
-ax.set_ylabel('Decoder confidence')
-ax.legend(loc='upper left')
-plt.tight_layout()
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-for f,n in zip(respRateFamiliar,respRateNovel):
-    ax.plot([0,1],[f,n],'k',alpha=0.1)
-ax.plot([0,1],[np.mean(respRateFamiliar),np.mean(respRateNovel)],'ko-',ms=10,lw=2)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks([0,1])
-ax.set_xticklabels(('Familiar','Novel'))
-ax.set_xlim([-0.25,1.25])
-ax.set_ylim([0,1])
-ax.set_ylabel('Response rate')
-plt.tight_layout()
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-rtFamiliar,rtNovel = [[np.mean(rt) for rt in respTime] for respTime in (respTimeFamiliar,respTimeNovel)]
-for f,n in zip(rtFamiliar,rtNovel):
-    ax.plot([0,1],[f,n],'k',alpha=0.1)
-ax.plot([0,1],[np.mean(rtFamiliar),np.mean(rtNovel)],'ko-',ms=10,lw=2)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks([0,1])
-ax.set_xticklabels(('Familiar','Novel'))
-ax.set_xlim([-0.25,1.25])
-ax.set_ylim([50,150])
-ax.set_ylabel('Response time (ms)')
-plt.tight_layout()
-
-
 # response time prediction from integrator
-filePaths = glob.glob(os.path.join(outputDir,'integratorResponseTimes','integratorResponseTimes_*.hdf5'))
+filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorResponseTimes_*.hdf5'))
 regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted')
 imageTypeLabels = ('familiar','familiarNovel','novel')
