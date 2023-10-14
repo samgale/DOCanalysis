@@ -74,7 +74,7 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     return hasSpikes & hasPeakResp & (pval<0.05)
 
 
-def crossValidate(model,X,y,nSplits):
+def trainDecoder(model,X,y,nSplits):
     # cross validation using stratified shuffle split
     # each split preserves the percentage of samples of each class
     # all samples used in one test set
