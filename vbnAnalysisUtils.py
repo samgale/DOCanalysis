@@ -35,9 +35,11 @@ def getBehavData(stim):
     engaged = np.array([np.sum(hit[stim['is_change']][(changeTimes>t-60) & (changeTimes<t+60)]) > 1 for t in flashTimes])
     autoRewarded = np.array(stim['auto_rewarded']).astype(bool)
     changeFlashes = np.array(stim['is_change'] & ~autoRewarded & engaged)
-    catchFlashes = stim['catch']
-    catchFlashes[catchFlashes.isnull()] = False
-    catchFlashes = np.array(catchFlashes).astype(bool) & engaged
+    catch = stim['catch'].copy()
+    catch[catch.isnull()] = False
+    catch = np.array(catch).astype(bool) & engaged
+    catchFlashes = np.zeros(catch.size,dtype=bool)
+    catchFlashes[np.searchsorted(flashTimes,np.unique(stim['change_time_no_display_delay'][catch]))] = True
     omittedFlashes = np.array(stim['omitted']) & engaged
     prevOmittedFlashes = np.array(stim['previous_omitted']) & engaged
     nonChangeFlashes = np.array(engaged &
@@ -46,7 +48,7 @@ def getBehavData(stim):
                                 (~stim['previous_omitted']) & 
                                 (stim['flashes_since_change']>5) &
                                 (stim['flashes_since_last_lick']>1))
-    novelFlashes = stim['novel_image']
+    novelFlashes = stim['novel_image'].copy()
     novelFlashes[novelFlashes.isnull()] = False
     novelFlashes = np.array(novelFlashes).astype(bool) & engaged
     lick = np.array(stim['lick_for_flash'])

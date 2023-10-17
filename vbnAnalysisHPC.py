@@ -314,8 +314,8 @@ def fitIntegratorModel(sessionId):
     baseWin = slice(680,750)
     respWin = slice(30,100)
     tEnd = 150
-    leakRange= np.arange(0,0.25,0.01)
-    thresholdRange = np.arange(0.5,3,0.1)
+    leakRange= np.arange(0,1.01,0.01)
+    thresholdRange = np.arange(0.1,10.1,0.1)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     rsUnits = np.array(units['waveform_duration'] > 0.4)
@@ -328,10 +328,10 @@ def fitIntegratorModel(sessionId):
     nChange = changeFlashes.sum()
     
     d = {region: {} for region in regions}
-    d['leakRange'] = leakRange
-    d['thresholdRange'] = thresholdRange
     d['sessionId'] = sessionId
     d['regions'] = regions
+    d['leakRange'] = leakRange
+    d['thresholdRange'] = thresholdRange
     d['imageName'] = np.array(stim['image_name'])
     d['change'] = changeFlashes
     d['preChange'] = preChangeFlashes
@@ -342,8 +342,15 @@ def fitIntegratorModel(sessionId):
     d['novel'] = novelFlashes
     d['lick'] = lick
     d['lickLatency'] = lickTimes - flashTimes
-    d['hit'] = np.array(stim['hit'])
-    d['falseAlarm'] = np.array(stim['false_alarm'])
+    outcome = []
+    for lbl in ('hit','miss','false_alarm','correct_reject'):
+        a = stim[lbl].copy()
+        a[a.isnull()] = False
+        outcome.append(np.array(a).astype(bool))
+    d['hit'] = outcome[0] & changeFlashes
+    d['miss'] = outcome[1] & changeFlashes
+    d['falseAlarm'] = outcome[2] & catchFlashes
+    d['correctReject'] = outcome[3] & catchFlashes
 
     warnings.filterwarnings('ignore')
     for region in regions:
