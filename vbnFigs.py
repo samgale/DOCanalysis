@@ -78,6 +78,7 @@ ax.set_ylabel('Number of sessions')
 plt.tight_layout()
 
 
+
 # lick latency
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -108,6 +109,7 @@ ax.set_ylabel('Cumulative probability')
 plt.tight_layout()
     
 
+
 # average frame and weighted mask
 for key in ('avgframe','motMask'):
     fig = plt.figure(figsize=(6,6))
@@ -137,6 +139,7 @@ for key in ('avgframe','motMask'):
     plt.tight_layout()
 
 
+
 # facemap lick decoding
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -159,6 +162,7 @@ ax.set_ylim([0.45,1])
 ax.set_xlabel('Time from non-change flash onset (ms)')
 ax.set_ylabel('Lick decoding balanced accuracy')
 plt.tight_layout()
+
 
 
 # unit lick decoding
@@ -207,6 +211,7 @@ ax.legend(loc='upper left',fontsize=8)
 plt.tight_layout()
 
 
+
 # lick decoding accuracy vs unit sample size
 unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
 
@@ -242,6 +247,7 @@ ax.legend(loc='upper right',fontsize=8)
 plt.tight_layout()
 
 
+
 # unit change decoding
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -268,6 +274,7 @@ ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Change decoding accuracy')
 ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
+
 
 
 # change decoding accuracy vs unit sample size
@@ -303,6 +310,7 @@ ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
 
+
 # change decoding correlation with behavior
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -331,6 +339,7 @@ ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Change decoder correlation with behavior')
 ax.legend(loc='upper left',fontsize=8)
 plt.tight_layout()
+
 
 
 # summary plot
@@ -365,13 +374,14 @@ ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
 
-# response time prediction from integrator
-filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorResponseTimes_*.hdf5'))
-regions = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
-flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted')
+
+# integrator model
+filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
+regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall')
+flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-t = np.arange(150)
+t = np.arange(150) 
 
 respMice = {flashes: {lbl: [] for lbl in imageTypeLabels} for flashes in flashLabels}
 respTimeMice = copy.deepcopy(respMice)
@@ -383,23 +393,38 @@ respModel = copy.deepcopy(respMiceRegions)
 respTimeModel = copy.deepcopy(respMiceRegions)
 leak = {region: {lbl: [] for lbl in imageTypeLabels} for region in regions}
 threshold = copy.deepcopy(leak)
-baseSpikeRate = copy.deepcopy(leak)
 maxSpikeRate = copy.deepcopy(leak)
 modelAccuracy = {region: [] for region in regions}
+trainAccuracy = copy.deepcopy(modelAccuracy)
+decoderAccuracy = copy.deepcopy(modelAccuracy)
+novelSession = copy.deepcopy(modelAccuracy)
 
 for i,f in enumerate(filePaths):
     print(i)
     with h5py.File(f,'r') as d:
+        if i==0:
+            leakRange = d['leakRange'][()]
+            thresholdRange = d['thresholdRange'][()]
+        if d['hit'][()].sum() < 10:
+            continue
         novel = d['novel'][()]
-        sessionType = 'novel' if np.any(novel) else 'familiar'
         for j,region in enumerate(regions):
-            modelAccuracy[region].append(d[region]['modelAccuracy'][()])
             if len(d[region]) > 0:
+                novelSession[region].append(np.any(novel))
+                modelAccuracy[region].append(d[region]['modelAccuracy'][()])
+                trainAccuracy[region].append(d[region]['trainAccuracy'][()])
+                decoderAccuracy[region].append(d[region]['decoderAccuracy'][()])
                 spRate = d[region]['spikeRate'][()]
                 intg = d[region]['integrator'][()]
             for k,flashes in enumerate(flashLabels):
-                if flashes == 'preChange':
-                    flashInd = np.concatenate((d['change'][1:],[False]))
+                if flashes=='hit':
+                    flashInd = d['change'][()] & d['hit'][()]
+                elif flashes=='miss':
+                    flashInd = d['change'][()] & ~d['hit'][()]
+                elif flashes=='falseAlarm':
+                    flashInd = d['catch'][()] & d['falseAlarm'][()]
+                elif flashes=='correctReject':
+                    flashInd = d['catch'][()] & ~d['falseAlarm'][()]
                 else:
                     flashInd = d[flashes][()]
                 if np.any(novel):
@@ -422,7 +447,6 @@ for i,f in enumerate(filePaths):
                         if k==0:
                             leak[region][lbl].append(d[region]['leak'][()])
                             threshold[region][lbl].append(d[region]['threshold'][()])
-                            baseSpikeRate[region][lbl].append(d[region]['baseSpikeRate'][()])
                             maxSpikeRate[region][lbl].append(d[region]['maxSpikeRate'][()])
 
 
@@ -449,9 +473,9 @@ for flashes in flashLabels:
             ax.set_xticklabels([])
         ax.set_ylabel('Spikes/s')
         ax.set_title(region)
-        if i==0:
-            ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+        ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
     plt.tight_layout()
+
 
 # plot mouse response rate and latency
 fig = plt.figure()
@@ -511,7 +535,7 @@ for flashes in flashLabels:
         ax = fig.add_subplot(len(regions),1,i+1)
         for lbl,clr in zip(imageTypeLabels,imageTypeColors):
             d = np.array(integrator[region][flashes][lbl])
-            d /= np.array(threshold[region][lbl])[:,None]
+            d /= np.mean(threshold[region][lbl],axis=1)[:,None]
             m = np.nanmean(d,axis=0)
             n = np.sum(~np.isnan(d[:,0]))
             s = np.nanstd(d,axis=0)/(n**0.5)
@@ -528,9 +552,9 @@ for flashes in flashLabels:
         if i==len(regions)//2-1:
             ax.set_ylabel('Integrator value relative to threshold')
         ax.set_title(region)
-        if i==0:
-            ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+        ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
     plt.tight_layout()
+
 
 # plot model response rate and decision time
 fig = plt.figure(figsize=(8,10))
@@ -597,12 +621,26 @@ plt.tight_layout()
 
 
 # plot threshold and leak
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+extent = [thresholdRange[0] - 0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0],
+          leakRange[-1] + 0.5*leakRange[0], leakRange[0]-0.5*leakRange[0]]
+im = ax.imshow(np.concatenate(trainAccuracy['VISall']).mean(axis=0),cmap='gray',interpolation='none')
+# for x,y,novel in zip(threshold['VISall'],leak['VISall'],novelSession['VISall']):
+#     clr = 'm' if novel else 'g'
+#     ax.plot(x,y,'o',mec=clr,mfc='none')
+ax.set_xlabel('threshold')
+ax.set_ylabel('leak')
+ax.set_title('model accuracy')
+cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+plt.tight_layout()
+
 fig = plt.figure(figsize=(6,8))
 for i,region in enumerate(regions):
     ax = fig.add_subplot(len(regions),1,i+1)
     for lbl,clr in zip(('familiar','novel'),'gm'):
-        thresh = np.array(threshold[region][lbl]) 
-        thresh *= np.array(maxSpikeRate[region][lbl])/1000
+        thresh = np.mean(threshold[region][lbl],axis=1) 
+        # thresh *= np.array(maxSpikeRate[region][lbl])/1000
         dsort = np.sort(thresh)
         cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
         ax.plot(dsort,cumProb,color=clr,label=lbl)
@@ -625,7 +663,7 @@ fig = plt.figure(figsize=(6,8))
 for i,region in enumerate(regions):
     ax = fig.add_subplot(len(regions),1,i+1)
     for lbl,clr in zip(('familiar','novel'),'gm'):
-        dsort = np.sort(leak[region][lbl])
+        dsort = np.sort(np.mean(leak[region][lbl],axis=1))
         cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
         ax.plot(dsort,cumProb,color=clr,label=lbl)
     for side in ('right','top'):
@@ -652,7 +690,8 @@ for sessionType,clr in zip(('familiar','novel'),'gm'):
     mean = []
     sem = []
     for region in regions:
-        d = modelAccuracy[region][sessionType]
+        ind = np.array(novelSession[region]) if sessionType=='novel' else ~np.array(novelSession[region])
+        d = np.array(modelAccuracy[region])[ind]
         mean.append(np.mean(d))
         sem.append(np.std(d)/(len(d)**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=10,label=sessionType)
@@ -668,46 +707,48 @@ ax.set_ylim([0.5,1])
 ax.set_ylabel('Change detection accuracy')
 plt.tight_layout()
 
-# correlation with mouse responses and response times
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.plot([0,1],[0,1],'k--')
+ax.plot(decoderAccuracy['VISall'],modelAccuracy['VISall'],'o',mec='k',mfc='none',alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0.5,1])
+ax.set_ylim([0.5,1])
+ax.set_aspect('equal')
+ax.set_xlabel('Decoder accuracy')
+ax.set_ylabel('Integrator accuracy')
+plt.tight_layout()
 
 
+# correlation of model and mouse responses and response times
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.plot([0,1],[0,1],'k--')
+for flashes in ('catch',): #flashLabels:
+    for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+        for mouse,model in zip(respMiceRegions['VISall'][flashes][lbl],respModel['VISall'][flashes][lbl]):
+            # accuracy = np.sum(model==mouse)/model.size
+            # chance = np.mean([np.sum(model[np.random.permutation(model.size)]==mouse)/model.size for _ in range(1000)])
+            accuracy = sklearn.metrics.balanced_accuracy_score(mouse,model)
+            chance = np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)])
+            ax.plot(chance,accuracy,'o',mec=clr,mfc='none')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,1])
+ax.set_ylim([0,1])
+ax.set_aspect('equal')
+ax.set_xlabel('Chance')
+ax.set_ylabel('Accuracy')
+plt.tight_layout()
+    
 
 # example session
 f = filePaths[0]
 with h5py.File(f,'r') as d:
-    novel = d['novel'][()]
-    novelSession.append(novel.any())
-    for j,region in enumerate(regions):
-        if len(d[region]) > 0:
-            spRate = d[region]['spikeRate'][()]
-            intg = d[region]['integrator'][()]
-        for k,flashes in enumerate(flashLabels):
-            if flashes == 'preChange':
-                flashInd = np.concatenate((d['change'][1:],[False]))
-            else:
-                flashInd = d[flashes][()]
-            if novelSession[-1]:
-                inds = ((flashInd & ~novel),(flashInd & novel))
-                lbls = imageTypeLabels[1:]
-            else:
-                inds = (flashInd,)
-                lbls = (imageTypeLabels[0],)
-            for ind,lbl in zip(inds,lbls):
-                if j==0:
-                    respMice[flashes][lbl].append(d['lick'][ind])
-                    respTimeMice[flashes][lbl].append(d['lickLatency'][ind])
-                if len(d[region]) > 0:
-                    respMiceRegions[region][flashes][lbl].append(d['lick'][ind])
-                    respTimeMiceRegions[region][flashes][lbl].append(d['lickLatency'][ind])
-                    spikeRate[region][flashes][lbl].append(spRate[ind].mean(axis=0))
-                    integrator[region][flashes][lbl].append(intg[ind].mean(axis=0))
-                    respModel[region][flashes][lbl].append(d[region]['modelResp'][ind])
-                    respTimeModel[region][flashes][lbl].append(d[region]['modelRespTime'][ind])
-                    if k==0:
-                        leak[region][lbl].append(d[region]['leak'][()])
-                        threshold[region][lbl].append(d[region]['threshold'][()])
-                        baseSpikeRate[region][lbl].append(d[region]['baseSpikeRate'][()])
-                        maxSpikeRate[region][lbl].append(d[region]['maxSpikeRate'][()])
+    pass
 
 
 
