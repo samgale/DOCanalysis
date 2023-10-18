@@ -14,6 +14,7 @@ import h5py
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
+import sklearn.metrics
 from vbnAnalysisUtils import getBehavData, findNearest
 
 
@@ -394,10 +395,10 @@ respTimeModel = copy.deepcopy(respMiceRegions)
 leak = {region: {lbl: [] for lbl in imageTypeLabels} for region in regions}
 threshold = copy.deepcopy(leak)
 maxSpikeRate = copy.deepcopy(leak)
-modelAccuracy = {region: [] for region in regions}
-trainAccuracy = copy.deepcopy(modelAccuracy)
-decoderAccuracy = copy.deepcopy(modelAccuracy)
-novelSession = copy.deepcopy(modelAccuracy)
+novelSession = {region: [] for region in regions}
+modelAccuracy = copy.deepcopy(novelSession)
+trainAccuracy = copy.deepcopy(novelSession)
+decoderAccuracy = {region: {decoder: [] for decoder in ('allUnits','populationAverage')} for region in regions}
 
 for i,f in enumerate(filePaths):
     print(i)
@@ -413,20 +414,12 @@ for i,f in enumerate(filePaths):
                 novelSession[region].append(np.any(novel))
                 modelAccuracy[region].append(d[region]['modelAccuracy'][()])
                 trainAccuracy[region].append(d[region]['trainAccuracy'][()])
-                decoderAccuracy[region].append(d[region]['decoderAccuracy'][()])
+                for decoder in ('allUnits','populationAverage'):
+                    decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 spRate = d[region]['spikeRate'][()]
                 intg = d[region]['integrator'][()]
             for k,flashes in enumerate(flashLabels):
-                if flashes=='hit':
-                    flashInd = d['change'][()] & d['hit'][()]
-                elif flashes=='miss':
-                    flashInd = d['change'][()] & ~d['hit'][()]
-                elif flashes=='falseAlarm':
-                    flashInd = d['catch'][()] & d['falseAlarm'][()]
-                elif flashes=='correctReject':
-                    flashInd = d['catch'][()] & ~d['falseAlarm'][()]
-                else:
-                    flashInd = d[flashes][()]
+                flashInd = d[flashes][()]
                 if np.any(novel):
                     inds = ((flashInd & ~novel),(flashInd & novel))
                     lbls = imageTypeLabels[1:]
@@ -486,8 +479,8 @@ for lbl,clr in zip(imageTypeLabels,imageTypeColors):
     sem = []
     for flashes in flashLabels:
         d = [r.sum()/r.size for r in respMice[flashes][lbl]]
-        mean.append(np.mean(d))
-        sem.append(np.std(d)/(len(d)**0.5))
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
     for x,m,s in zip(xticks,mean,sem):
         ax.plot([x,x],[m-s,m+s],color=clr)
@@ -521,7 +514,7 @@ ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(xticks)
 ax.set_xticklabels(flashLabels)
 ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-ax.set_ylim([350,500])
+# ax.set_ylim([350,500])
 ax.set_ylabel('Response time (ms)')
 ax.set_title('Mice')
 plt.tight_layout()
@@ -566,8 +559,8 @@ for i,region in enumerate(regions):
         sem = []
         for flashes in flashLabels:
             d = [r.sum()/r.size for r in respModel[region][flashes][lbl]]
-            mean.append(np.mean(d))
-            sem.append(np.std(d)/(len(d)**0.5))
+            mean.append(np.nanmean(d))
+            sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
         ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
         for x,m,s in zip(xticks,mean,sem):
             ax.plot([x,x],[m-s,m+s],color=clr)
@@ -623,14 +616,22 @@ plt.tight_layout()
 # plot threshold and leak
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-extent = [thresholdRange[0] - 0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0],
-          leakRange[-1] + 0.5*leakRange[0], leakRange[0]-0.5*leakRange[0]]
-im = ax.imshow(np.concatenate(trainAccuracy['VISall']).mean(axis=0),cmap='gray',interpolation='none')
-# for x,y,novel in zip(threshold['VISall'],leak['VISall'],novelSession['VISall']):
-#     clr = 'm' if novel else 'g'
-#     ax.plot(x,y,'o',mec=clr,mfc='none')
-ax.set_xlabel('threshold')
-ax.set_ylabel('leak')
+extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
+          thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
+im = ax.imshow(np.concatenate(trainAccuracy['VISall']).mean(axis=0).T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+mean = []
+sem = []
+for lbl,clr in zip(('familiar','novel'),'gm'):
+    lk = np.mean(leak['VISall'][lbl],axis=1)
+    thresh = np.mean(threshold['VISall'][lbl],axis=1)
+    ax.plot(lk,thresh,'o',mec=clr,mfc='none',ms=8)
+    mx,my = (lk.mean(),thresh.mean())
+    sx,sy = (lk.std()/(len(lk)**0.5),thresh.std()/(len(thresh)**0.5))
+    ax.plot(mx,my,'o',color=clr,ms=12)
+    ax.plot([mx-sx,mx+sx],[my,my],color=clr)
+    ax.plot([mx,mx],[my-sy,my+sy],color=clr)
+ax.set_xlabel('leak')
+ax.set_ylabel('threshold')
 ax.set_title('model accuracy')
 cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
 plt.tight_layout()
@@ -640,7 +641,7 @@ for i,region in enumerate(regions):
     ax = fig.add_subplot(len(regions),1,i+1)
     for lbl,clr in zip(('familiar','novel'),'gm'):
         thresh = np.mean(threshold[region][lbl],axis=1) 
-        # thresh *= np.array(maxSpikeRate[region][lbl])/1000
+        thresh *= np.array(maxSpikeRate[region][lbl])/1000
         dsort = np.sort(thresh)
         cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
         ax.plot(dsort,cumProb,color=clr,label=lbl)
@@ -707,41 +708,93 @@ ax.set_ylim([0.5,1])
 ax.set_ylabel('Change detection accuracy')
 plt.tight_layout()
 
+for decoder in ('allUnits','populationAverage'):
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    ax.plot([0,1],[0,1],'k--')
+    ax.plot(decoderAccuracy['VISall'][decoder],modelAccuracy['VISall'],'o',mec='k',mfc='none',alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0.5,1])
+    ax.set_ylim([0.5,1])
+    ax.set_aspect('equal')
+    ax.set_xlabel('Decoder accuracy ('+decoder+')')
+    ax.set_ylabel('Integrator accuracy')
+    plt.tight_layout()  
+
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 ax.plot([0,1],[0,1],'k--')
-ax.plot(decoderAccuracy['VISall'],modelAccuracy['VISall'],'o',mec='k',mfc='none',alpha=0.25)
+ax.plot(decoderAccuracy['VISall']['allUnits'],decoderAccuracy['VISall']['populationAverage'],'o',mec='k',mfc='none',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlim([0.5,1])
 ax.set_ylim([0.5,1])
 ax.set_aspect('equal')
-ax.set_xlabel('Decoder accuracy')
-ax.set_ylabel('Integrator accuracy')
-plt.tight_layout()
+ax.set_xlabel('Decoder accuracy (all units)')
+ax.set_ylabel('Decoder accuracy (population average)')
+plt.tight_layout()                        
 
 
 # correlation of model and mouse responses and response times
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-ax.plot([0,1],[0,1],'k--')
-for flashes in ('catch',): #flashLabels:
-    for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+xticks = np.arange(4)
+for i,flashes in enumerate(('change','nonChange')):
+    for lbl,clr,offset in zip(imageTypeLabels,imageTypeColors,(-0.2,0,0.2)):
+        accuracy = []
+        chance = []
         for mouse,model in zip(respMiceRegions['VISall'][flashes][lbl],respModel['VISall'][flashes][lbl]):
-            # accuracy = np.sum(model==mouse)/model.size
-            # chance = np.mean([np.sum(model[np.random.permutation(model.size)]==mouse)/model.size for _ in range(1000)])
-            accuracy = sklearn.metrics.balanced_accuracy_score(mouse,model)
-            chance = np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)])
-            ax.plot(chance,accuracy,'o',mec=clr,mfc='none')
+            model = model.astype(bool)
+            # accuracy.append((mouse & model).sum() / (mouse | model).sum())
+            # chance.append(np.mean([(mouse & model[np.random.permutation(model.size)]).sum() / (mouse | model).sum() for _ in range(100)]))
+            accuracy.append(sklearn.metrics.balanced_accuracy_score(mouse,model))
+            chance.append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
+        for j,d in enumerate((accuracy,chance)):
+            x = xticks[i*2+j] + offset
+            ax.plot(np.zeros(len(d))+x,d,'o',mec=clr,mfc='none',alpha=0.25)
+            m = np.mean(d)
+            s = np.std(d)/(len(d)**0.5)
+            ax.plot(x,m,'o',color=clr)
+            ax.plot([x,x],[m-s,m+s],color=clr)    
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlim([0,1])
-ax.set_ylim([0,1])
-ax.set_aspect('equal')
-ax.set_xlabel('Chance')
-ax.set_ylabel('Accuracy')
+ax.set_xticks(xticks)
+ax.set_xticklabels(('change','change shuffled','no change','no change shuffled'))
+# ax.set_ylim([0.4,0.85])
+ax.set_ylabel('Similarity of mouse and model responses (balanced accuracy)')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+xticks = np.arange(4)
+for i,flashes in enumerate(('change','nonChange')):
+    for lbl,clr,offset in zip(imageTypeLabels,imageTypeColors,(-0.2,0,0.2)):
+        accuracy = []
+        chance = []
+        for mouse,model in zip(respTimeMiceRegions['VISall'][flashes][lbl],respTimeModel['VISall'][flashes][lbl]):
+            ind = ~np.isnan(mouse) & ~np.isnan(model)
+            mouse = mouse[ind]
+            model = model[ind]
+            accuracy.append(np.corrcoef(mouse,model)[0,1])
+            chance.append(np.mean([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(100)]))
+        for j,d in enumerate((accuracy,chance)):
+            x = xticks[i*2+j] + offset
+            ax.plot(np.zeros(len(d))+x,d,'o',mec=clr,mfc='none',alpha=0.25)
+            m = np.nanmean(d)
+            s = np.nanstd(d)/(np.sum(~np.isnan(d))**0.5)
+            ax.plot(x,m,'o',color=clr)
+            ax.plot([x,x],[m-s,m+s],color=clr)    
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(('change','change shuffled','no change','no change shuffled'))
+#ax.set_ylim([0.4,0.85])
+ax.set_ylabel('Correlation of mouse and model response times')
 plt.tight_layout()
     
 
