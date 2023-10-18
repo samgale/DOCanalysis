@@ -308,7 +308,7 @@ def decodeChange(sessionId):
 
 
 def fitIntegratorModel(sessionId):
-    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall')
+    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC','MRN')
     nCrossVal = 5
     minUnits = 20
     baseWin = slice(680,750)
@@ -354,8 +354,15 @@ def fitIntegratorModel(sessionId):
 
     warnings.filterwarnings('ignore')
     for region in regions:
-        reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam') if region=='VISall' else region
-        inRegion = np.in1d(units['structure_acronym'],reg) & rsUnits
+        if region=='VISall':
+            reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
+        elif region=='SC':
+            reg = ('SCig','SCiw')
+        else:
+            reg = region
+        inRegion = np.in1d(units['structure_acronym'],reg)
+        if 'VIS' in region:
+            inRegion = inRegion & rsUnits
         if not any(inRegion):
             continue
         
@@ -433,26 +440,31 @@ def fitIntegratorModel(sessionId):
         d[region]['modelRespTime'] = modelRespTime
         d[region]['modelAccuracy'] = sklearn.metrics.accuracy_score(y[shuffleInd],modelResp[shuffleInd])
         
-        X = sp[hasResp,:,:tEnd].transpose(1,0,2).reshape((nFlash,-1))              
-        decoderTrainAccuracy = np.zeros(nCrossVal+1)
-        decoderWeights = np.zeros((nCrossVal+1,X.shape[1]))
-        decoderAccuracy = np.zeros(nCrossVal)
-        decoderPrediction = np.zeros(nFlash)
-        decoderConfidence = np.zeros(nFlash)
-        for k,(train,test) in enumerate(zip(trainInd,testInd)):
-            decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
-            decoder.fit(X[train],y[train])
-            decoderTrainAccuracy[k] = decoder.score(X[train],y[train])
-            decoderWeights[k] = np.squeeze(decoder.coef_)
-            if k < nCrossVal:
-                decoderAccuracy[k] = decoder.score(X[test],y[test])
-            decoderPrediction[test] = decoder.predict(X[test])
-            decoderConfidence[test] = decoder.decision_function(X[test])
-        d[region]['decoderTrainAccuracy'] = decoderTrainAccuracy
-        d[region]['decoderWeights'] = decoderWeights
-        d[region]['decoderAccuracy'] = decoderAccuracy
-        d[region]['decoderPrediction'] = decoderPrediction
-        d[region]['decoderConfidence'] = decoderConfidence
+        d[region]['decoderTrainAccuracy'] = {}
+        d[region]['decoderWeights'] = {}
+        d[region]['decoderAccuracy'] = {}
+        d[region]['decoderPrediction'] = {}
+        d[region]['decoderConfidence'] = {}
+        for X,lbl in zip((flashSp,sp[hasResp,:,:tEnd].transpose(1,0,2).reshape((nFlash,-1))),('populationAverage','allUnits')):              
+            decoderTrainAccuracy = np.zeros(nCrossVal+1)
+            decoderWeights = np.zeros((nCrossVal+1,X.shape[1]))
+            decoderAccuracy = np.zeros(nCrossVal)
+            decoderPrediction = np.zeros(nFlash)
+            decoderConfidence = np.zeros(nFlash)
+            for k,(train,test) in enumerate(zip(trainInd,testInd)):
+                decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
+                decoder.fit(X[train],y[train])
+                decoderTrainAccuracy[k] = decoder.score(X[train],y[train])
+                decoderWeights[k] = np.squeeze(decoder.coef_)
+                if k < nCrossVal:
+                    decoderAccuracy[k] = decoder.score(X[test],y[test])
+                decoderPrediction[test] = decoder.predict(X[test])
+                decoderConfidence[test] = decoder.decision_function(X[test])
+            d[region]['decoderTrainAccuracy'][lbl] = decoderTrainAccuracy
+            d[region]['decoderWeights'][lbl] = decoderWeights
+            d[region]['decoderAccuracy'][lbl] = decoderAccuracy
+            d[region]['decoderPrediction'][lbl] = decoderPrediction
+            d[region]['decoderConfidence'][lbl] = decoderConfidence
     warnings.filterwarnings('default')
 
     h5File = h5py.File(os.path.join(outputDir,'integratorModel','integratorModel_'+str(sessionId)+'.hdf5'),'w')
