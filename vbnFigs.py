@@ -378,9 +378,9 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall')
+regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC','MRN')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
-imageTypeLabels = ('familiar','familiarNovel','novel')
+imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
 t = np.arange(150) 
 
@@ -392,6 +392,7 @@ spikeRate = copy.deepcopy(respMiceRegions)
 integrator = copy.deepcopy(respMiceRegions)
 respModel = copy.deepcopy(respMiceRegions)
 respTimeModel = copy.deepcopy(respMiceRegions)
+imageNames = copy.deepcopy(respMiceRegions)
 leak = {region: {lbl: [] for lbl in imageTypeLabels} for region in regions}
 threshold = copy.deepcopy(leak)
 maxSpikeRate = copy.deepcopy(leak)
@@ -421,11 +422,11 @@ for i,f in enumerate(filePaths):
             for k,flashes in enumerate(flashLabels):
                 flashInd = d[flashes][()]
                 if np.any(novel):
-                    inds = ((flashInd & ~novel),(flashInd & novel))
-                    lbls = imageTypeLabels[1:]
+                    inds = (flashInd,(flashInd & ~novel),(flashInd & novel))
+                    lbls = ('all',) + imageTypeLabels[-2:]
                 else:
-                    inds = (flashInd,)
-                    lbls = (imageTypeLabels[0],)
+                    inds = (flashInd,flashInd)
+                    lbls = imageTypeLabels[:2]
                 for ind,lbl in zip(inds,lbls):
                     if j==0:
                         respMice[flashes][lbl].append(d['lick'][ind])
@@ -437,6 +438,7 @@ for i,f in enumerate(filePaths):
                         integrator[region][flashes][lbl].append(intg[ind].mean(axis=0))
                         respModel[region][flashes][lbl].append(d[region]['modelResp'][ind])
                         respTimeModel[region][flashes][lbl].append(d[region]['modelRespTime'][ind])
+                        imageNames[region][flashes][lbl].append(d['imageName'].asstr()[ind])
                         if k==0:
                             leak[region][lbl].append(d[region]['leak'][()])
                             threshold[region][lbl].append(d[region]['threshold'][()])
@@ -614,16 +616,17 @@ plt.tight_layout()
 
 
 # plot threshold and leak
+region = 'VISall'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
           thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
-im = ax.imshow(np.concatenate(trainAccuracy['VISall']).mean(axis=0).T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+im = ax.imshow(np.concatenate(trainAccuracy[region]).mean(axis=0).T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
 mean = []
 sem = []
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    lk = np.mean(leak['VISall'][lbl],axis=1)
-    thresh = np.mean(threshold['VISall'][lbl],axis=1)
+    lk = np.median(leak[region][lbl],axis=1)
+    thresh = np.median(threshold[region][lbl],axis=1)
     ax.plot(lk,thresh,'o',mec=clr,mfc='none',ms=8)
     mx,my = (lk.mean(),thresh.mean())
     sx,sy = (lk.std()/(len(lk)**0.5),thresh.std()/(len(thresh)**0.5))
@@ -739,6 +742,87 @@ plt.tight_layout()
 
 
 # correlation of model and mouse responses and response times
+region = 'VISall'
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+xticks = np.arange(2)
+accuracy = []
+chance = []
+for mouseChange,mouseCatch,modelChange,modelCatch in zip(respMiceRegions[region]['change']['all'],respMiceRegions[region]['catch']['all'],
+                                                         respModel[region]['change']['all'],respModel[region]['catch']['all']):
+    mouse = np.concatenate((mouseChange,mouseCatch))
+    model = np.concatenate((modelChange,modelCatch))
+    accuracy.append(sklearn.metrics.balanced_accuracy_score(mouse,model))
+    chance.append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
+for d,ls,lbl in zip((accuracy,chance),('-','--'),('data','shuffled')):
+    dsort = np.sort(d)
+    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+    ax.plot(dsort,cumProb,color='k',ls=ls,label=lbl)   
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0.45,1])
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Similarity of model and mouse (balanced accuracy)')
+ax.set_ylabel('Cumulative fraction of sessions')
+ax.legend(loc='lower right')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+xticks = np.arange(2)
+accuracy = {lbl: [] for lbl in ('all','familiar','novel')}
+chance = copy.deepcopy(accuracy)
+for mouse,model,novel in zip(respMiceRegions[region]['change']['all'],respModel[region]['change']['all'],novelSession[region]):
+    accuracy['all'].append(sklearn.metrics.balanced_accuracy_score(mouse,model))
+    chance['all'].append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
+    lbl = 'novel' if novel else 'familiar'
+    accuracy[lbl].append(accuracy['all'][-1])
+    chance[lbl].append(chance['all'][-1])
+for lbl,clr in zip(('all','familiar','novel'),'kgm'):
+    for d,ls,lb in zip((accuracy[lbl],chance[lbl]),('-','--'),('','shuffled')):
+        dsort = np.sort(d)
+        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+        ax.plot(dsort,cumProb,color=clr,ls=ls,label=lbl+' '+lb)   
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0.45,1])
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Similarity of model and mouse (balanced accuracy)')
+ax.set_ylabel('Cumulative fraction of sessions')
+ax.legend(loc='lower right')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+xticks = np.arange(2)
+accuracy = []
+chance = []
+for mouseChange,mouseCatch,modelChange,modelCatch in zip(respTimeMiceRegions[region]['change']['all'],respTimeMiceRegions[region]['catch']['all'],
+                                                         respTimeModel[region]['change']['all'],respTimeModel[region]['catch']['all']):
+    mouse = np.concatenate((mouseChange,mouseCatch))
+    model = np.concatenate((modelChange,modelCatch))
+    ind = ~np.isnan(mouse) & ~np.isnan(model)
+    mouse = mouse[ind]
+    model = model[ind]
+    accuracy.append(np.corrcoef(mouse,model)[0,1])
+    chance.append(np.mean([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(100)]))
+for x,d in enumerate((accuracy,chance)):
+    ax.plot(np.zeros(len(d))+x,d,'o',mec='k',mfc='none',alpha=0.25)
+    m = np.nanmean(d)
+    s = np.nanstd(d)/(np.sum(~np.isnan(d))**0.5)
+    ax.plot(x,m,'ko')
+    ax.plot([x,x],[m-s,m+s],color='k')    
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(('change','change shuffled'))
+ax.set_ylabel('Correlation of mouse and model response times')
+plt.tight_layout()
+
+
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(4)
@@ -746,10 +830,7 @@ for i,flashes in enumerate(('change','nonChange')):
     for lbl,clr,offset in zip(imageTypeLabels,imageTypeColors,(-0.2,0,0.2)):
         accuracy = []
         chance = []
-        for mouse,model in zip(respMiceRegions['VISall'][flashes][lbl],respModel['VISall'][flashes][lbl]):
-            model = model.astype(bool)
-            # accuracy.append((mouse & model).sum() / (mouse | model).sum())
-            # chance.append(np.mean([(mouse & model[np.random.permutation(model.size)]).sum() / (mouse | model).sum() for _ in range(100)]))
+        for mouse,model in zip(respMiceRegions[region][flashes][lbl],respModel[region][flashes][lbl]):
             accuracy.append(sklearn.metrics.balanced_accuracy_score(mouse,model))
             chance.append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
         for j,d in enumerate((accuracy,chance)):
@@ -764,7 +845,7 @@ for side in ('right','top'):
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(xticks)
 ax.set_xticklabels(('change','change shuffled','no change','no change shuffled'))
-# ax.set_ylim([0.4,0.85])
+ax.set_ylim([0.4,0.85])
 ax.set_ylabel('Similarity of mouse and model responses (balanced accuracy)')
 plt.tight_layout()
 
@@ -775,7 +856,7 @@ for i,flashes in enumerate(('change','nonChange')):
     for lbl,clr,offset in zip(imageTypeLabels,imageTypeColors,(-0.2,0,0.2)):
         accuracy = []
         chance = []
-        for mouse,model in zip(respTimeMiceRegions['VISall'][flashes][lbl],respTimeModel['VISall'][flashes][lbl]):
+        for mouse,model in zip(respTimeMiceRegions[region][flashes][lbl],respTimeModel[region][flashes][lbl]):
             ind = ~np.isnan(mouse) & ~np.isnan(model)
             mouse = mouse[ind]
             model = model[ind]
@@ -793,10 +874,57 @@ for side in ('right','top'):
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(xticks)
 ax.set_xticklabels(('change','change shuffled','no change','no change shuffled'))
-#ax.set_ylim([0.4,0.85])
 ax.set_ylabel('Correlation of mouse and model response times')
 plt.tight_layout()
+
+
+# image response matrix
+region = 'VISall'
+
+images = {'G': ['im083_r', 'im111_r', 'im036_r', 'im012_r', 'im044_r', 'im047_r', 'im115_r', 'im078_r'],
+          'H': ['im083_r', 'im111_r', 'im104_r', 'im114_r', 'im005_r', 'im087_r', 'im024_r', 'im034_r']}
+
+respMat = {src: {imgSet: {famNov: [] for famNov in ('familiar','novel')} for imgSet in ('G','H')} for src in ('mouse','model')}
+
+preImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['preChange']['all'],imageNames[region]['catch']['all'])]
+changeImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['change']['all'],imageNames[region]['catch']['all'])]
+mouseResp,modelResp = [[np.concatenate((change,catch)) for change,catch in zip(r[region]['change']['all'],respMiceRegions[region]['catch']['all'])] for r in (respMiceRegions,respModel)]
+
+for resp,src in zip((mouseResp,modelResp),('mouse','model')):
+    for novel,preImgs,chImgs,rsp in zip(novelSession[region],preImage,changeImage,resp):
+        imgSet = 'G' if np.all(np.in1d(chImgs,images['G'])) else 'H'
+        famNov = 'novel' if novel else 'familiar'
+        rmat = np.zeros((8,8))
+        count = rmat.copy()
+        for pre,ch,r in zip(preImgs,chImgs,rsp):
+            i = images[imgSet].index(pre)
+            j = images[imgSet].index(ch)
+            count[i,j] += 1
+            if r:
+                rmat[i,j] += 1
+        rmat /= count
+        respMat[src][imgSet][famNov].append(rmat)
     
+for imgSet in ('G','H'):
+    for famNov in ('familiar','novel'):
+        fig = plt.figure()
+        for i,src in enumerate(('mouse','model')):
+            ax = fig.add_subplot(2,1,i+1)
+            rmat = respMat[src][imgSet][famNov]
+            rmean = np.nanmean(rmat,axis=0)
+            im = ax.imshow(rmean,clim=(0,1),cmap='magma')
+            cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+            if i==0:
+                ax.set_title('image set '+imgSet+', '+famNov+' n='+str(len(rmat))+' sessions')
+            else:
+                # mouse = np.nanmean(respMat['mouse'][imgSet][famNov],axis=0).flatten()
+                # model = rmean.flatten()
+                # r = np.corrcoef(mouse,model)[0,1]
+                # rShuffle = np.array([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(1000)])
+                # p = np.sum((rShuffle>r))/rShuffle.size
+                ax.set_title('model') #', r='+str(round(r,2))+' ,r shuffle= '+str(round(np.median(rShuffle),2))+' p='+str(p))
+        plt.tight_layout()
+
 
 # example session
 f = filePaths[0]
