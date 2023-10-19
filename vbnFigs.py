@@ -797,7 +797,7 @@ plt.tight_layout()
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
-accuracy = []
+corr = []
 chance = []
 for mouseChange,mouseCatch,modelChange,modelCatch in zip(respTimeMiceRegions[region]['change']['all'],respTimeMiceRegions[region]['catch']['all'],
                                                          respTimeModel[region]['change']['all'],respTimeModel[region]['catch']['all']):
@@ -806,123 +806,105 @@ for mouseChange,mouseCatch,modelChange,modelCatch in zip(respTimeMiceRegions[reg
     ind = ~np.isnan(mouse) & ~np.isnan(model)
     mouse = mouse[ind]
     model = model[ind]
-    accuracy.append(np.corrcoef(mouse,model)[0,1])
+    corr.append(np.corrcoef(mouse,model)[0,1])
     chance.append(np.mean([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(100)]))
-for x,d in enumerate((accuracy,chance)):
-    ax.plot(np.zeros(len(d))+x,d,'o',mec='k',mfc='none',alpha=0.25)
-    m = np.nanmean(d)
-    s = np.nanstd(d)/(np.sum(~np.isnan(d))**0.5)
-    ax.plot(x,m,'ko')
-    ax.plot([x,x],[m-s,m+s],color='k')    
+for d,ls,lbl in zip((corr,chance),('-','--'),('data','shuffled')):
+    d = np.array(d)
+    dsort = np.sort(d[~np.isnan(d)])
+    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+    ax.plot(dsort,cumProb,color='k',ls=ls,label=lbl)   
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks(xticks)
-ax.set_xticklabels(('change','change shuffled'))
-ax.set_ylabel('Correlation of mouse and model response times')
-plt.tight_layout()
-
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-xticks = np.arange(4)
-for i,flashes in enumerate(('change','nonChange')):
-    for lbl,clr,offset in zip(imageTypeLabels,imageTypeColors,(-0.2,0,0.2)):
-        accuracy = []
-        chance = []
-        for mouse,model in zip(respMiceRegions[region][flashes][lbl],respModel[region][flashes][lbl]):
-            accuracy.append(sklearn.metrics.balanced_accuracy_score(mouse,model))
-            chance.append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
-        for j,d in enumerate((accuracy,chance)):
-            x = xticks[i*2+j] + offset
-            ax.plot(np.zeros(len(d))+x,d,'o',mec=clr,mfc='none',alpha=0.25)
-            m = np.mean(d)
-            s = np.std(d)/(len(d)**0.5)
-            ax.plot(x,m,'o',color=clr)
-            ax.plot([x,x],[m-s,m+s],color=clr)    
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks(xticks)
-ax.set_xticklabels(('change','change shuffled','no change','no change shuffled'))
-ax.set_ylim([0.4,0.85])
-ax.set_ylabel('Similarity of mouse and model responses (balanced accuracy)')
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Correlation of mouse and model response times')
+ax.set_ylabel('Cumulative fraction of sessions')
+ax.legend(loc='lower right')
 plt.tight_layout()
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-xticks = np.arange(4)
-for i,flashes in enumerate(('change','nonChange')):
-    for lbl,clr,offset in zip(imageTypeLabels,imageTypeColors,(-0.2,0,0.2)):
-        accuracy = []
-        chance = []
-        for mouse,model in zip(respTimeMiceRegions[region][flashes][lbl],respTimeModel[region][flashes][lbl]):
-            ind = ~np.isnan(mouse) & ~np.isnan(model)
-            mouse = mouse[ind]
-            model = model[ind]
-            accuracy.append(np.corrcoef(mouse,model)[0,1])
-            chance.append(np.mean([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(100)]))
-        for j,d in enumerate((accuracy,chance)):
-            x = xticks[i*2+j] + offset
-            ax.plot(np.zeros(len(d))+x,d,'o',mec=clr,mfc='none',alpha=0.25)
-            m = np.nanmean(d)
-            s = np.nanstd(d)/(np.sum(~np.isnan(d))**0.5)
-            ax.plot(x,m,'o',color=clr)
-            ax.plot([x,x],[m-s,m+s],color=clr)    
+xticks = np.arange(2)
+corr = {lbl: [] for lbl in ('all','familiar','novel')}
+chance = copy.deepcopy(corr)
+for mouse,model,novel in zip(respTimeMiceRegions[region]['change']['all'],respTimeModel[region]['change']['all'],novelSession[region]):
+    ind = ~np.isnan(mouse) & ~np.isnan(model)
+    mouse = mouse[ind]
+    model = model[ind]
+    corr['all'].append(np.corrcoef(mouse,model)[0,1])
+    chance['all'].append(np.mean([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(100)]))
+    lbl = 'novel' if novel else 'familiar'
+    corr[lbl].append(corr['all'][-1])
+    chance[lbl].append(chance['all'][-1])
+for lbl,clr in zip(('all','familiar','novel'),'kgm'):
+    for d,ls,lb in zip((corr[lbl],chance[lbl]),('-','--'),('','shuffled')):
+        d = np.array(d)
+        dsort = np.sort(d[~np.isnan(d)])
+        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+        ax.plot(dsort,cumProb,color=clr,ls=ls,label=lbl+' '+lb)   
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks(xticks)
-ax.set_xticklabels(('change','change shuffled','no change','no change shuffled'))
-ax.set_ylabel('Correlation of mouse and model response times')
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Correlation of mouse and model response times')
+ax.set_ylabel('Cumulative fraction of sessions')
+ax.legend(loc='lower right')
 plt.tight_layout()
 
 
 # image response matrix
 region = 'VISall'
 
-images = {'G': ['im083_r', 'im111_r', 'im036_r', 'im012_r', 'im044_r', 'im047_r', 'im115_r', 'im078_r'],
-          'H': ['im083_r', 'im111_r', 'im104_r', 'im114_r', 'im005_r', 'im087_r', 'im024_r', 'im034_r']}
-
-respMat = {src: {imgSet: {famNov: [] for famNov in ('familiar','novel')} for imgSet in ('G','H')} for src in ('mouse','model')}
+images = {'G': ['im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'],
+          'H': ['im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r']}
 
 preImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['preChange']['all'],imageNames[region]['catch']['all'])]
 changeImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['change']['all'],imageNames[region]['catch']['all'])]
-mouseResp,modelResp = [[np.concatenate((change,catch)) for change,catch in zip(r[region]['change']['all'],respMiceRegions[region]['catch']['all'])] for r in (respMiceRegions,respModel)]
+mouseResp,modelResp = [[np.concatenate((change,catch)) for change,catch in zip(r[region]['change']['all'],r[region]['catch']['all'])] for r in (respMiceRegions,respModel)]
+mouseRespTime,modelRespTime = [[np.concatenate((change,catch)) for change,catch in zip(r[region]['change']['all'],r[region]['catch']['all'])] for r in (respTimeMiceRegions,respTimeModel)]
 
-for resp,src in zip((mouseResp,modelResp),('mouse','model')):
-    for novel,preImgs,chImgs,rsp in zip(novelSession[region],preImage,changeImage,resp):
+respMat = {src: {imgSet: {famNov: [] for famNov in ('familiar','novel')} for imgSet in ('G','H')} for src in ('mouse','model')}
+respTimeMat = copy.deepcopy(respMat)
+for resp,respTime,src in zip((mouseResp,modelResp),(mouseRespTime,modelRespTime),('mouse','model')):
+    for novel,preImgs,chImgs,rsp,rspTme in zip(novelSession[region],preImage,changeImage,resp,respTime):
         imgSet = 'G' if np.all(np.in1d(chImgs,images['G'])) else 'H'
         famNov = 'novel' if novel else 'familiar'
         rmat = np.zeros((8,8))
-        count = rmat.copy()
-        for pre,ch,r in zip(preImgs,chImgs,rsp):
+        rcount = rmat.copy()
+        rtmat = rmat.copy()
+        rtcount = rmat.copy()
+        for pre,ch,r,rt in zip(preImgs,chImgs,rsp,rspTme):
             i = images[imgSet].index(pre)
             j = images[imgSet].index(ch)
-            count[i,j] += 1
+            rcount[i,j] += 1
             if r:
                 rmat[i,j] += 1
-        rmat /= count
+            if not np.isnan(rt):
+                rtcount[i,j] += 1
+                rtmat[i,j] += rt
+        rmat /= rcount
+        rtmat /= rtcount
         respMat[src][imgSet][famNov].append(rmat)
+        respTimeMat[src][imgSet][famNov].append(rtmat)
     
 for imgSet in ('G','H'):
     for famNov in ('familiar','novel'):
         fig = plt.figure()
+        fig.suptitle('image set '+imgSet+', '+famNov+' n='+str(len(respMat['mouse'][imgSet][famNov]))+' sessions')
+        gs = matplotlib.gridspec.GridSpec(2,2)
         for i,src in enumerate(('mouse','model')):
-            ax = fig.add_subplot(2,1,i+1)
-            rmat = respMat[src][imgSet][famNov]
-            rmean = np.nanmean(rmat,axis=0)
-            im = ax.imshow(rmean,clim=(0,1),cmap='magma')
-            cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
-            if i==0:
-                ax.set_title('image set '+imgSet+', '+famNov+' n='+str(len(rmat))+' sessions')
-            else:
-                # mouse = np.nanmean(respMat['mouse'][imgSet][famNov],axis=0).flatten()
-                # model = rmean.flatten()
-                # r = np.corrcoef(mouse,model)[0,1]
-                # rShuffle = np.array([np.corrcoef(mouse,model[np.random.permutation(model.size)])[0,1] for _ in range(1000)])
-                # p = np.sum((rShuffle>r))/rShuffle.size
-                ax.set_title('model') #', r='+str(round(r,2))+' ,r shuffle= '+str(round(np.median(rShuffle),2))+' p='+str(p))
+            for j,(r,lbl) in enumerate(zip((respMat,respTimeMat),('response rate','response time (ms)'))):
+                ax = fig.add_subplot(gs[i,j])
+                m = np.nanmean(r[src][imgSet][famNov],axis=0)
+                if src=='mouse' and 'time' in lbl:
+                    m *= 1000
+                im = ax.imshow(m,cmap='magma',origin='lower')
+                cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_xlabel('Change image')
+                ax.set_ylabel('Pre-change image')
+                ax.set_title(src+' '+lbl)
         plt.tight_layout()
 
 
