@@ -15,7 +15,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
 import sklearn.metrics
-from vbnAnalysisUtils import getBehavData, findNearest
+from vbnAnalysisUtils import findNearest, getBehavData, findResponsiveUnits
 
 
 baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\supplemental_tables'
@@ -23,6 +23,9 @@ baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\s
 outputDir = r'\\allen\programs\mindscope\workgroups\np-behavior\VBN_video_analysis'
 
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
+
+unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
+unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 sessionIds = stimTable['session_id'].unique()
 
@@ -93,13 +96,13 @@ for sessionId in sessionIds:
         lickLatency = (lickTimes - flashTimes)[nonChangeFlashes & lick]
         dsort = np.sort(lickLatency)
         cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
-        ax.plot(dsort,cumProb,'k',alpha=0.25)
+        ax.plot(dsort,cumProb,'0.5',alpha=0.25)
         h = np.histogram(lickLatency,lickLatBins)[0]
         cumProbLick.append(np.cumsum(h)/np.sum(h))
 m = np.mean(cumProbLick,axis=0)
 s = np.std(cumProbLick,axis=0)/(len(cumProbLick)**0.5)
-ax.plot(lickLatTime,m,color='r',lw=2)
-ax.fill_between(lickLatTime,m+s,m-s,color='r',alpha=0.25)
+ax.plot(lickLatTime,m,color='k',lw=2)
+ax.fill_between(lickLatTime,m+s,m-s,color='k',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -149,13 +152,13 @@ for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapLickDecoding','unb
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
-        ax.plot(d['decodeWindows'],d['balancedAccuracy'],'k',alpha=0.25)
+        ax.plot(d['decodeWindows'],d['balancedAccuracy'],'0.5',alpha=0.25)
         facemapLickDecoding.append(d['balancedAccuracy'])
 m = np.mean(facemapLickDecoding,axis=0)
 s = np.std(facemapLickDecoding,axis=0)/(len(facemapLickDecoding)**0.5)
 facemapDecodingTime= d['decodeWindows']
-ax.plot(facemapDecodingTime,m,color='r',lw=2)
-ax.fill_between(facemapDecodingTime,m+s,m-s,color='r',alpha=0.25)
+ax.plot(facemapDecodingTime,m,color='g',lw=2)
+ax.fill_between(facemapDecodingTime,m+s,m-s,color='g',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -342,8 +345,74 @@ ax.legend(loc='upper left',fontsize=8)
 plt.tight_layout()
 
 
+# psth
+regions = ('VISp',('SCig','SCiw'))
+
+baseWin = slice(680,750)
+respWin = slice(30,100)
+
+psth = {region: [] for region in regions}
+for sessionInd,sessionId in enumerate(sessionIds):
+    print(sessionInd)
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+
+    for region in regions:
+        inRegion = np.in1d(units['structure_acronym'],region)
+        if not any(inRegion):
+            continue
+                
+        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(inRegion)[0]):
+            sp[i]=spikes[u,:,:]
+            
+        changeSp = sp[:,changeFlashes,:]
+        preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        if hasResp.any():
+            psth[region].append(changeSp[hasResp].mean(axis=(0,1)))
+        
+
 
 # summary plot
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+mbReg = ('SCig','SCiw')
+mbLbl = 'SC'
+# mbReg = 'MRN'
+# mbLbl = 'MRN'
+for d,t,clr,lbl in zip((psth['VISp'],unitChangeDecoding['VISp'],
+                        unitChangeDecoding[mbReg],changeDecodingCorr[mbReg],unitLickDecoding[mbReg],
+                        facemapLickDecoding,cumProbLick),
+                       ((np.arange(750)/1000,)+(unitDecodingTime,)*4+(facemapDecodingTime,lickLatTime)),
+                       ('0.5','r','m','b','c','g','k'),
+                       ('V1 spike rate','change decoding (V1 units)','change decoding (SC units)','change decoder correlation with behavor (SC units)',
+                        'lick decoding (SC units, non-change flashes)','lick decoding (face motion), non-change flashes',
+                        'lick probability')):
+    m = np.mean(d,axis=0)
+    m -= m[0]
+    scale = 1/m.max()
+    m *= scale
+    s = np.std(d,axis=0)/(len(cumProbLick)**0.5)
+    s *= scale
+    ax.plot(t,m,color=clr,label=lbl)
+    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([-0.05,1.05])
+ax.set_xlabel('Time from flash onset (s)')
+ax.set_ylabel('Normalized value')
+ax.legend(loc='lower right',fontsize=8)
+# ax.legend(loc='upper left',fontsize=8)
+plt.tight_layout()
+
+
+# summary plot, simpler version
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 mbReg = ('SCig','SCiw')
@@ -378,7 +447,7 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC','MRN')
+regions = ('VISall','VISp') #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC','MRN')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
