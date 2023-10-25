@@ -5,6 +5,7 @@ Created on Fri Sep 29 14:39:37 2023
 @author: svc_ccg
 """
 
+import os
 import math
 import numpy as np
 import scipy.stats
@@ -64,6 +65,35 @@ def getBehavData(stim):
     lickTimes[earlyLick | lateLick] = np.nan
     return flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes
 
+
+def getUnitsInRegion(units,region,rs=False,fs=False):
+    if region in ('SC/MRN cluster 1','SC/MRN cluster 2'):
+        clust = 1 if '1' in region else 2
+        dirPath = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis'
+        clustId = np.load(os.path.join(dirPath,'sc_mrn_clusterId.npy'))
+        clustUnitId = np.load(os.path.join(dirPath,'sc_mrn_clusterUnitId.npy'))
+        u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
+        inRegion = np.in1d(units.index,u)
+    else:
+        if region=='VISall':
+            reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
+        elif region=='SC':
+            reg = ('SCig','SCiw')
+        elif region=='Hipp':
+            reg = ('HPF','DG','CA1','CA3')
+        elif region=='Sub':
+            reg = ('SUB','ProS','PRE','POST')
+        else:
+            reg = region
+        inRegion = np.in1d(units['structure_acronym'],reg)
+        if 'VIS' in region:
+            rsUnits = np.array(units['waveform_duration'] > 0.4)
+            if rs and not fs:
+                inRegion = inRegion & rsUnits
+            elif fs and not rs:
+                inRegion = inRegion & ~rsUnits
+    return inRegion
+    
 
 def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     hasSpikes = ((respPsth[:,:,respWin].mean(axis=(1,2)) - basePsth[:,:,baseWin].mean(axis=(1,2))) / 0.001) > 0.1

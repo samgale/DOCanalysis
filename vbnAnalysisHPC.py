@@ -16,7 +16,7 @@ import h5py
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
-from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, findResponsiveUnits, trainDecoder
+from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInRegion, findResponsiveUnits, trainDecoder
 
 
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
@@ -149,8 +149,8 @@ def decodeLicksFromUnits(sessionId):
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
     regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-               'MRN','MB',('SCig','SCiw'),'APN','NOT',
-               ('HPF','DG','CA1','CA3'),('SUB','ProS','PRE','POST'))
+               'MRN','MB','SC','APN','NOT','Hipp','Sub',
+               'SC/MRN cluster 1','SC/MRN cluster 2')
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -168,7 +168,7 @@ def decodeLicksFromUnits(sessionId):
     y = lick[nonChangeFlashes]
     warnings.filterwarnings('ignore')
     for region in regions:
-        inRegion = np.in1d(units['structure_acronym'],region)
+        inRegion = getUnitsInRegion(units,region)
         if not any(inRegion):
             continue
                 
@@ -232,8 +232,8 @@ def decodeChange(sessionId):
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
     regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-               'MRN','MB',('SCig','SCiw'),'APN','NOT',
-               ('HPF','DG','CA1','CA3'),('SUB','ProS','PRE','POST'))
+               'MRN','MB','SC','APN','NOT','Hipp','Sub',
+               'SC/MRN cluster 1','SC/MRN cluster 2')
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -253,7 +253,7 @@ def decodeChange(sessionId):
     y[:nChange] = 1
     warnings.filterwarnings('ignore')
     for region in regions:
-        inRegion = np.in1d(units['structure_acronym'],region)
+        inRegion = getUnitsInRegion(units,region)
         if not any(inRegion):
             continue
                 
@@ -354,15 +354,7 @@ def fitIntegratorModel(sessionId):
 
     warnings.filterwarnings('ignore')
     for region in regions:
-        if region=='VISall':
-            reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
-        elif region=='SC':
-            reg = ('SCig','SCiw')
-        else:
-            reg = region
-        inRegion = np.in1d(units['structure_acronym'],reg)
-        if 'VIS' in region:
-            inRegion = inRegion & rsUnits
+        inRegion = getUnitsInRegion(units,region,rs=True)
         if not any(inRegion):
             continue
         
@@ -479,6 +471,6 @@ if __name__ == "__main__":
     sessionId = args.sessionId
     #runFacemap(sessionId)
     #decodeLicksFromFacemap(sessionId)
-    #decodeLicksFromUnits(sessionId)
+    decodeLicksFromUnits(sessionId)
     #decodeChange(sessionId)
-    fitIntegratorModel(sessionId)
+    #fitIntegratorModel(sessionId)
