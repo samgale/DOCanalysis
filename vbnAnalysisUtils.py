@@ -8,7 +8,11 @@ Created on Fri Sep 29 14:39:37 2023
 import math
 import numpy as np
 import scipy.stats
+import scipy.cluster
 import sklearn
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.rcParams['pdf.fonttype'] = 42
 
 
 def dictToHdf5(group,d):
@@ -116,4 +120,95 @@ def trainDecoder(model,X,y,nSplits):
             if attr in estimator.__dict__:
                 cv[attr[:-1]].append(getattr(estimator,attr))
     return cv
+
+
+def pca(data,plot=False):
+    # data is n samples x m parameters
+    eigVal,eigVec = np.linalg.eigh(np.cov(data,rowvar=False))
+    order = np.argsort(eigVal)[::-1]
+    eigVal = eigVal[order]
+    eigVec = eigVec[:,order]
+    pcaData = data.dot(eigVec)
+    if plot:
+        fig = plt.figure(facecolor='w')
+        ax = fig.add_subplot(1,1,1)
+        ax.plot(np.arange(1,eigVal.size+1),eigVal.cumsum()/eigVal.sum(),'k')
+        ax.set_xlim((0.5,eigVal.size+0.5))
+        ax.set_ylim((0,1.02))
+        ax.set_xlabel('PC')
+        ax.set_ylabel('Cumulative Fraction of Variance')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        
+        fig = plt.figure(facecolor='w')
+        ax = fig.add_subplot(1,1,1)
+        im = ax.imshow(eigVec,clim=(-1,1),cmap='bwr',interpolation='none',origin='lower')
+        ax.set_xlabel('PC')
+        ax.set_ylabel('Parameter')
+        ax.set_title('PC Weightings')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+        cb.ax.tick_params(length=0)
+        cb.set_ticks([-1,0,1])
+    return pcaData,eigVal,eigVec
+
+
+def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colors=None,labels=None,xmax=None,nreps=1000,title=None):
+    # data is n samples x m parameters
+    linkageMat = scipy.cluster.hierarchy.linkage(data,method=method,metric=metric)
+    if nClusters is None:
+        clustId = None
+    else:
+        clustId = scipy.cluster.hierarchy.fcluster(linkageMat,nClusters,'maxclust')
+    if plot:
+        plt.figure(facecolor='w')
+        ax = plt.subplot(1,1,1)
+        colorThresh = 0 if nClusters<2 else linkageMat[::-1,2][nClusters-2]
+        if colors is not None:
+            scipy.cluster.hierarchy.set_link_color_palette(list(colors))
+        if labels=='off':
+            labels=None
+            noLabels=True
+        else:
+            noLabels=False
+        scipy.cluster.hierarchy.dendrogram(linkageMat,ax=ax,color_threshold=colorThresh,above_threshold_color='k',labels=labels,no_labels=noLabels)
+        scipy.cluster.hierarchy.set_link_color_palette(None)
+        ax.set_yticks([])
+        for side in ('right','top','left','bottom'):
+            ax.spines[side].set_visible(False)
+        if title is not None:
+            ax.set_title(title)
+        plt.tight_layout()
+            
+        plt.figure(facecolor='w')
+        ax = plt.subplot(1,1,1)
+        k = np.arange(linkageMat.shape[0])+2
+        if nreps>0:
+            randLinkage = np.zeros((nreps,linkageMat.shape[0]))
+            shuffledData = data.copy()
+            for i in range(nreps):
+                for j in range(data.shape[1]):
+                    shuffledData[:,j] = data[np.random.permutation(data.shape[0]),j]
+                _,m = cluster(shuffledData,method=method,metric=metric)
+                randLinkage[i] = m[::-1,2]
+            ax.plot(k,np.percentile(randLinkage,2.5,axis=0),'k--')
+            ax.plot(k,np.percentile(randLinkage,97.5,axis=0),'k--')
+        ax.plot(k,linkageMat[::-1,2],'ko-',mfc='none',ms=10,mew=2,linewidth=2)
+        if xmax is None:
+            ax.set_xlim([0,k[-1]+1])
+        else:
+            ax.set_xlim([0,xmax])
+        ax.set_xlabel('Cluster')
+        ax.set_ylabel('Linkage Distance')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        if title is not None:
+            ax.set_title(title)
+        plt.tight_layout()
+    
+    return clustId,linkageMat
 

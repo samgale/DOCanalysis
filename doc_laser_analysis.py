@@ -276,7 +276,7 @@ def plotPerformance(exps,label=None,sessions=None,led=None,showReactionTimes=Fal
         ax.set_ylabel('Reaction time (ms)')
         ax.legend()
             
-    return hitRate,falseAlarmRate
+    return hitRate,falseAlarmRate,xticks
             
             
 def plotLicks(obj,preTime=1.5,postTime=0.75):

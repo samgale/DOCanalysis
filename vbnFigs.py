@@ -15,7 +15,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
 import sklearn.metrics
-from vbnAnalysisUtils import findNearest, getBehavData, findResponsiveUnits
+from vbnAnalysisUtils import getBehavData, findResponsiveUnits, pca, cluster
 
 
 baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\supplemental_tables'
@@ -346,12 +346,15 @@ plt.tight_layout()
 
 
 # psth
-regions = ('VISp',('SCig','SCiw'))
+regions = ('VISp',('SCig','SCiw'),'MRN')
 
 baseWin = slice(680,750)
 respWin = slice(30,100)
 
+psthBinSize = 5
+psthTime = np.arange(0,750,psthBinSize)/1000
 psth = {region: [] for region in regions}
+psthUnitId = copy.deepcopy(psth)
 for sessionInd,sessionId in enumerate(sessionIds):
     print(sessionInd)
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -359,7 +362,8 @@ for sessionInd,sessionId in enumerate(sessionIds):
 
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-
+    nChange = changeFlashes.sum()
+    
     for region in regions:
         inRegion = np.in1d(units['structure_acronym'],region)
         if not any(inRegion):
@@ -372,43 +376,69 @@ for sessionInd,sessionId in enumerate(sessionIds):
         changeSp = sp[:,changeFlashes,:]
         preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
         hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
-        if hasResp.any():
-            psth[region].append(changeSp[hasResp].mean(axis=(0,1)))
+        nUnits = hasResp.sum()
+        if nUnits > 0:
+            r = changeSp[hasResp].reshape(nUnits,nChange,-1,psthBinSize).mean(axis=-1)
+            psth[region].append(r.mean(axis=1))
+            psthUnitId[region].append(np.array(units.index[inRegion][hasResp]))
         
+
+# cluster psth    
+mbPsth = np.concatenate(psth[('SCig','SCiw')]+psth['MRN'])
+clustData = mbPsth.copy()
+clustData -= clustData[:,:int(10/psthBinSize)].mean(axis=1)[:,None]
+clustData /= clustData.max(axis=1)[:,None]
+clustId,linkageMat = cluster(clustData,nClusters=2,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=lbl)
+clustUnitId = np.concatenate(psthUnitId[('SCig','SCiw')]+psthUnitId['MRN'])
+
+
+# V1 opto
+optoTime = np.concatenate(([0],np.array([50,83.33333333,116.66666667])/1000-0.5/60,[0.75]))
+optoEffect = 1-np.array([0.07194244604316546,0.14545454545454545,0.5132743362831859,0.7326732673267327,0.7935590421139554])
 
 
 # summary plot
-fig = plt.figure()
+fig = plt.figure(figsize=(10,6))
 ax = fig.add_subplot(1,1,1)
-mbReg = ('SCig','SCiw')
-mbLbl = 'SC'
-# mbReg = 'MRN'
-# mbLbl = 'MRN'
-for d,t,clr,lbl in zip((psth['VISp'],unitChangeDecoding['VISp'],
-                        unitChangeDecoding[mbReg],changeDecodingCorr[mbReg],unitLickDecoding[mbReg],
-                        facemapLickDecoding,cumProbLick),
-                       ((np.arange(750)/1000,)+(unitDecodingTime,)*4+(facemapDecodingTime,lickLatTime)),
-                       ('0.5','r','m','b','c','g','k'),
-                       ('V1 spike rate','change decoding (V1 units)','change decoding (SC units)','change decoder correlation with behavor (SC units)',
-                        'lick decoding (SC units, non-change flashes)','lick decoding (face motion), non-change flashes',
-                        'lick probability')):
-    m = np.mean(d,axis=0)
-    m -= m[0]
-    scale = 1/m.max()
-    m *= scale
-    s = np.std(d,axis=0)/(len(cumProbLick)**0.5)
-    s *= scale
-    ax.plot(t,m,color=clr,label=lbl)
-    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+include = (0,1,2,3,4,5,6,7,8,9)
+for i,(d,t,clr,lbl) in enumerate(zip((np.concatenate(psth['VISp']),unitChangeDecoding['VISp'],optoEffect,
+                                      mbPsth[clustId==1],mbPsth[clustId==2],
+                                      unitChangeDecoding[('SCig','SCiw')]+unitChangeDecoding['MRN'],
+                                      changeDecodingCorr[('SCig','SCiw')]+changeDecodingCorr['MRN'],
+                                      unitLickDecoding[('SCig','SCiw')]+unitLickDecoding['MRN'],
+                                      facemapLickDecoding,cumProbLick),
+                                     (psthTime,unitDecodingTime,optoTime,psthTime,psthTime,unitDecodingTime,unitDecodingTime,
+                                      unitDecodingTime,facemapDecodingTime,lickLatTime),
+                                     ('0.5','r','k','y',[1,0.5,0],'m','c','b','g','k'),
+                                     ('V1 spike rate','V1 change decoding','Behavioral effect of V1 silencing',
+                                      'SC/MRN spike rate (cluster 1)','SC/MRN spike rate (cluster 2)',
+                                      'SC/MRN change decoding','SC/MRN change decoder correlation with behavior',
+                                      'SC/MRN lick decoding (non-change flashes)','Face motion lick decoding (non-change flashes)',
+                                      'Lick probability'))):
+    if i not in include:
+        ax.plot(np.nan,np.nan,color=clr,label='                                               ')
+    elif 'silencing' in lbl:
+        m = d-d[-1]
+        m /= m.max()
+        ax.plot(t,m,'o--',color=clr,label=lbl)
+    else:
+        m = np.mean(d,axis=0)
+        m -= m[0]
+        scale = m.max()
+        m /= scale
+        s = np.std(d,axis=0)/(len(d)**0.5)
+        s /= scale
+        ax.plot(t,m,color=clr,label=lbl)
+        ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlim([0,0.75])
-ax.set_ylim([-0.05,1.05])
+ax.set_ylim([-0.2,1.1])
 ax.set_xlabel('Time from flash onset (s)')
 ax.set_ylabel('Normalized value')
 ax.legend(loc='lower right',fontsize=8)
-# ax.legend(loc='upper left',fontsize=8)
+ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
 
