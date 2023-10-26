@@ -144,6 +144,7 @@ def decodeLicksFromUnits(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
+    decodeWindowSampleSize = 10
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
@@ -199,7 +200,7 @@ def decodeLicksFromUnits(sessionId):
                 unitSamples = [[i] for i in range(nUnits)]
 
             for winEnd in decodeWindows:
-                if sampleSize!=20 and winEnd!=decodeWindows[-1]:
+                if sampleSize!=decodeWindowSampleSize and winEnd!=decodeWindows[-1]:
                     continue
                 winEnd = int(winEnd/decodeWindowSize)
                 for metric in d[region][sampleSize]:
@@ -268,6 +269,7 @@ def decodeChange(sessionId):
 
         changeSp,preChangeSp = [s[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nChange,len(decodeWindows),decodeWindowSize)).sum(axis=-1) for s in (changeSp,preChangeSp)]
         
+        decodeWindowSampleSize = 10 if region=='SC/MRN cluster 1' else 20
         for sampleSize in unitSampleSize:
             if nUnits < sampleSize:
                 continue
@@ -284,7 +286,7 @@ def decodeChange(sessionId):
                 unitSamples = [[i] for i in range(nUnits)]
 
             for winEnd in decodeWindows:
-                if sampleSize!=20 and winEnd!=decodeWindows[-1]:
+                if sampleSize!=decodeWindowSampleSize and winEnd!=decodeWindows[-1]:
                     continue
                 winEnd = int(winEnd/decodeWindowSize)
                 for metric in d[region][sampleSize]:
@@ -308,7 +310,7 @@ def decodeChange(sessionId):
 
 
 def fitIntegratorModel(sessionId):
-    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC','MRN')
+    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
     nCrossVal = 5
     minUnits = 20
     baseWin = slice(680,750)
@@ -472,5 +474,5 @@ if __name__ == "__main__":
     #runFacemap(sessionId)
     #decodeLicksFromFacemap(sessionId)
     decodeLicksFromUnits(sessionId)
-    #decodeChange(sessionId)
+    decodeChange(sessionId)
     #fitIntegratorModel(sessionId)
