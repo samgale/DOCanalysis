@@ -15,7 +15,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
 import sklearn.metrics
-from vbnAnalysisUtils import getBehavData, findResponsiveUnits, pca, cluster
+from vbnAnalysisUtils import getBehavData, getUnitsInRegion, findResponsiveUnits, cluster
 
 
 baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\supplemental_tables'
@@ -82,7 +82,6 @@ ax.set_ylabel('Number of sessions')
 plt.tight_layout()
 
 
-
 # lick latency
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -113,7 +112,6 @@ ax.set_ylabel('Cumulative probability')
 plt.tight_layout()
     
 
-
 # average frame and weighted mask
 for key in ('avgframe','motMask'):
     fig = plt.figure(figsize=(6,6))
@@ -143,7 +141,6 @@ for key in ('avgframe','motMask'):
     plt.tight_layout()
 
 
-
 # facemap lick decoding
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -168,65 +165,26 @@ ax.set_ylabel('Lick decoding balanced accuracy')
 plt.tight_layout()
 
 
-
 # unit lick decoding
 regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-           'MRN','MB',('SCig','SCiw'),'APN','NOT',
-           ('HPF','DG','CA1','CA3'),('SUB','ProS','PRE','POST'))
-layers = ('all',('1','2/3'),'4','5',('6a','6b'))
+           'Hipp','Sub','APN','NOT','SC','MRN','MB',
+           'SC/MRN cluster 1','SC/MRN cluster 2')
 regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
-layerColors = plt.cm.magma(np.linspace(0,0.8,len(layers)))
-regionLabels = []
-for region in regions:
-    if 'SCig' in region:
-        regionLabels.append('SC')
-    elif 'HPF' in region:
-        regionLabels.append('Hipp')
-    elif 'SUB' in region:
-        regionLabels.append('Sub')
-    else:
-        regionLabels.append(region)
 
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-sampleSize = 20
+unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
+decodeWindowSampleSize = 10
+
 unitLickDecoding = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unbalanced','unitLickDecoding_*.npy'))):
+lickDecodingSampleSize = {region: [] for region in regions}
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
         for region in regions:
-            a = d[region][sampleSize]['balancedAccuracy']
+            a = d[region][decodeWindowSampleSize]['balancedAccuracy']
             if len(a)>0:
                 unitLickDecoding[region].append(a)
-unitDecodingTime = (d['decodeWindows'] - d['decodeWindows'][0]/2) / 1000
-for region,clr,lbl in zip(regions,regionColors,regionLabels):
-    if len(unitLickDecoding[region])>0:
-        m = np.mean(unitLickDecoding[region],axis=0)
-        s = np.std(unitLickDecoding[region],axis=0)/(len(unitLickDecoding[region])**0.5)
-        ax.plot(unitDecodingTime,m,color=clr,label=lbl+' (n='+str(len(unitLickDecoding[region]))+')')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_ylim([0.45,1])
-ax.set_xlabel('Time from non-change flash onset (s)')
-ax.set_ylabel('Lick decoding balanced accuracy')
-ax.legend(loc='upper left',fontsize=8)
-plt.tight_layout()
-
-
-
-# lick decoding accuracy vs unit sample size
-unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-lickDecodingSampleSize = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unbalanced','unitLickDecoding_*.npy'))):
-    print(i)
-    d = np.load(f,allow_pickle=True).item()
-    if d['lick'].sum() >= 10:
-        for region in regions:
+                
             lickDecodingSampleSize[region].append([])
             for sampleSize in unitSampleSize:
                 a = d[region][sampleSize]['balancedAccuracy']
@@ -234,42 +192,78 @@ for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unbala
                     lickDecodingSampleSize[region][-1].append(a[-1])
                 else:
                     lickDecodingSampleSize[region][-1].append(np.nan)
-for region,clr,lbl in zip(regions,regionColors,regionLabels):
+unitDecodingTime = (d['decodeWindows'] - d['decodeWindows'][0]/2) / 1000
+            
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+for region,clr in zip(regions,regionColors):
+    if len(unitLickDecoding[region])>0:
+        m = np.mean(unitLickDecoding[region],axis=0)
+        s = np.std(unitLickDecoding[region],axis=0)/(len(unitLickDecoding[region])**0.5)
+        ax.plot(unitDecodingTime,m,color=clr,label=region+' (n='+str(len(unitLickDecoding[region]))+')')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([0.45,1])
+ax.set_xlabel('Time from non-change flash onset (s)')
+ax.set_ylabel('Lick decoding balanced accuracy')
+ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
+
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+for region,clr in zip(regions,regionColors):
     if len(lickDecodingSampleSize[region])>0:
         m = np.nanmean(lickDecodingSampleSize[region],axis=0)
         n = np.sum(~np.isnan(lickDecodingSampleSize[region]),axis=0)
         s = np.nanstd(lickDecodingSampleSize[region],axis=0)/(n**0.5)
         i = n>2
-        ax.plot(unitSampleSize[i],m[i],color=clr,label=lbl)
+        ax.plot(unitSampleSize[i],m[i],color=clr,label=region)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0.45,1])
 ax.set_xlabel('Number of units')
 ax.set_ylabel('Lick decoding balanced accuracy')
-ax.legend(loc='upper right',fontsize=8)
+ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
 
-
 # unit change decoding
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-sampleSize = 20
 unitChangeDecoding = {region: [] for region in regions}
+changeDecodingSampleSize = {region: [] for region in regions}
+changeDecodingCorr = {region: [] for region in regions}
 for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
-    if d['hit'].sum() >= 10:
+    hit = d['hit']
+    if hit.sum() >= 10:
         for region in regions:
-            a = d[region][sampleSize]['accuracy']
+            decodeWindowSampleSize = 10 if region=='SC/MRN cluster 1' else 20
+            a = d[region][decodeWindowSampleSize]['accuracy']
             if len(a)>0:
                 unitChangeDecoding[region].append(a)
-for region,clr,lbl in zip(regions,regionColors,regionLabels):
+                
+            changeDecodingSampleSize[region].append([])
+            for sampleSize in unitSampleSize:
+                a = d[region][sampleSize]['accuracy']
+                if len(a) > 0:
+                    changeDecodingSampleSize[region][-1].append(a[-1])
+                else:
+                    changeDecodingSampleSize[region][-1].append(np.nan)
+            
+            if hit.sum() < hit.size:
+                conf = d[region][decodeWindowSampleSize]['confidence']
+                if len(conf)>0:
+                    changeDecodingCorr[region].append([np.corrcoef(hit,c[:hit.size])[0,1] for c in conf])
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for region,clr in zip(regions,regionColors):
     if len(unitChangeDecoding[region])>0:
         m = np.mean(unitChangeDecoding[region],axis=0)
         s = np.std(unitChangeDecoding[region],axis=0)/(len(unitChangeDecoding[region])**0.5)
-        ax.plot(unitDecodingTime,m,color=clr,label=lbl+' (n='+str(len(unitChangeDecoding[region]))+')')
+        ax.plot(unitDecodingTime,m,color=clr,label=region+' (n='+str(len(unitChangeDecoding[region]))+')')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -279,31 +273,15 @@ ax.set_ylabel('Change decoding accuracy')
 ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
-
-
-# change decoding accuracy vs unit sample size
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-changeDecodingSampleSize = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
-    print(i)
-    d = np.load(f,allow_pickle=True).item()
-    if d['hit'].sum() >= 10:
-        for region in regions:
-            changeDecodingSampleSize[region].append([])
-            for sampleSize in unitSampleSize:
-                a = d[region][sampleSize]['accuracy']
-                if len(a) > 0:
-                    changeDecodingSampleSize[region][-1].append(a[-1])
-                else:
-                    changeDecodingSampleSize[region][-1].append(np.nan)
-for region,clr,lbl in zip(regions,regionColors,regionLabels):
+for region,clr in zip(regions,regionColors):
     if len(changeDecodingSampleSize[region])>0:
         m = np.nanmean(changeDecodingSampleSize[region],axis=0)
         n = np.sum(~np.isnan(changeDecodingSampleSize[region]),axis=0)
         s = np.nanstd(changeDecodingSampleSize[region],axis=0)/(n**0.5)
         i = n>2
-        ax.plot(unitSampleSize[i],m[i],color=clr,label=lbl)
+        ax.plot(unitSampleSize[i],m[i],color=clr,label=region)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -313,28 +291,13 @@ ax.set_ylabel('Change decoding accuracy')
 ax.legend(loc='lower right',fontsize=8)
 plt.tight_layout()
 
-
-
-# change decoding correlation with behavior
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-sampleSize = 20
-changeDecodingCorr = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
-    print(i)
-    d = np.load(f,allow_pickle=True).item()
-    hit = d['hit']
-    decodeWindows = d['decodeWindows']
-    if hit.sum() >= 10 and hit.sum() < hit.size:
-        for region in regions:
-            conf = d[region][sampleSize]['confidence']
-            if len(conf)>0:
-                changeDecodingCorr[region].append([np.corrcoef(hit,c[:hit.size])[0,1] for c in conf])
-for region,clr,lbl in zip(regions,regionColors,regionLabels):
+for region,clr in zip(regions,regionColors):
     if len(changeDecodingCorr[region])>0:
         m = np.mean(changeDecodingCorr[region],axis=0)
         s = np.std(changeDecodingCorr[region],axis=0)/(len(changeDecodingCorr[region])**0.5)
-        ax.plot(unitDecodingTime,m,color=clr,label=lbl+' (n='+str(len(changeDecodingCorr[region]))+')')
+        ax.plot(unitDecodingTime,m,color=clr,label=region+' (n='+str(len(changeDecodingCorr[region]))+')')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -346,7 +309,7 @@ plt.tight_layout()
 
 
 # psth
-regions = ('VISp',('SCig','SCiw'),'MRN')
+regions = ('VISp','SC','MRN')
 
 baseWin = slice(680,750)
 respWin = slice(30,100)
@@ -365,7 +328,7 @@ for sessionInd,sessionId in enumerate(sessionIds):
     nChange = changeFlashes.sum()
     
     for region in regions:
-        inRegion = np.in1d(units['structure_acronym'],region)
+        inRegion = getUnitsInRegion(units,region)
         if not any(inRegion):
             continue
                 
@@ -384,13 +347,15 @@ for sessionInd,sessionId in enumerate(sessionIds):
         
 
 # cluster psth    
-mbPsth = np.concatenate(psth[('SCig','SCiw')]+psth['MRN'])
+mbPsth = np.concatenate(psth['SC']+psth['MRN'])
 clustData = mbPsth.copy()
 clustData -= clustData[:,:int(10/psthBinSize)].mean(axis=1)[:,None]
 clustData /= clustData.max(axis=1)[:,None]
-clustId,linkageMat = cluster(clustData,nClusters=2,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=lbl)
-clustUnitId = np.concatenate(psthUnitId[('SCig','SCiw')]+psthUnitId['MRN'])
+clustId,linkageMat = cluster(clustData,nClusters=2,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=None)
+clustUnitId = np.concatenate(psthUnitId['SC']+psthUnitId['MRN'])
 
+np.save(os.path.join(outputDir,'sc_mrn_clusterId.npy'),clustId)
+np.save(os.path.join(outputDir,'sc_mrn_clusterUnitId.npy'),clustUnitId)
 
 # V1 opto
 optoTime = np.concatenate(([0],np.array([50,83.33333333,116.66666667])/1000-0.5/60,[0.75]))
@@ -400,23 +365,19 @@ optoEffect = 1-np.array([0.07194244604316546,0.14545454545454545,0.5132743362831
 # summary plot
 fig = plt.figure(figsize=(10,6))
 ax = fig.add_subplot(1,1,1)
-include = (0,1,2,3,4,5,6,7,8,9)
+include = (0,1,2,3,4,5,6,7)
 for i,(d,t,clr,lbl) in enumerate(zip((np.concatenate(psth['VISp']),unitChangeDecoding['VISp'],optoEffect,
-                                      mbPsth[clustId==1],mbPsth[clustId==2],
-                                      unitChangeDecoding[('SCig','SCiw')]+unitChangeDecoding['MRN'],
-                                      changeDecodingCorr[('SCig','SCiw')]+changeDecodingCorr['MRN'],
-                                      unitLickDecoding[('SCig','SCiw')]+unitLickDecoding['MRN'],
+                                      mbPsth[clustId==1],mbPsth[clustId==2],unitLickDecoding['SC/MRN cluster 1'],
                                       facemapLickDecoding,cumProbLick),
-                                     (psthTime,unitDecodingTime,optoTime,psthTime,psthTime,unitDecodingTime,unitDecodingTime,
-                                      unitDecodingTime,facemapDecodingTime,lickLatTime),
-                                     ('0.5','r','k','y',[1,0.5,0],'m','c','b','g','k'),
+                                     (psthTime,unitDecodingTime,optoTime,
+                                      psthTime,psthTime,unitDecodingTime,
+                                      facemapDecodingTime,lickLatTime),
+                                     ('0.5','r','k','c','m','b','g','k'),
                                      ('V1 spike rate','V1 change decoding','Behavioral effect of V1 silencing',
-                                      'SC/MRN spike rate (cluster 1)','SC/MRN spike rate (cluster 2)',
-                                      'SC/MRN change decoding','SC/MRN change decoder correlation with behavior',
-                                      'SC/MRN lick decoding (non-change flashes)','Face motion lick decoding (non-change flashes)',
-                                      'Lick probability'))):
+                                      'SC/MRN spike rate (cluster 1)','SC/MRN spike rate (cluster 2)','SC/MRN cluster 1 lick decoding',
+                                      'Face motion lick decoding','Lick probability'))):
     if i not in include:
-        ax.plot(np.nan,np.nan,color=clr,label='                                               ')
+        ax.plot(np.nan,np.nan,color=clr,label=' '*36)
     elif 'silencing' in lbl:
         m = d-d[-1]
         m /= m.max()
@@ -439,38 +400,6 @@ ax.set_xlabel('Time from flash onset (s)')
 ax.set_ylabel('Normalized value')
 ax.legend(loc='lower right',fontsize=8)
 ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
-plt.tight_layout()
-
-
-# summary plot, simpler version
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-mbReg = ('SCig','SCiw')
-mbLbl = 'SC'
-# mbReg = 'MRN'
-# mbLbl = 'MRN'
-for d,t,clr,lbl in zip((cumProbLick,facemapLickDecoding,unitLickDecoding[mbReg],unitChangeDecoding['VISp']),
-                       (lickLatTime,facemapDecodingTime)+(unitDecodingTime,)*2,
-                       ('k','r','b','g'),
-                       ('lick prob','lick decoding (face motion, non-change flashes)',
-                        'lick decoding ('+mbLbl+' units, non-change flashes)','change decoding (V1 units)')):
-    m = np.mean(d,axis=0)
-    m -= m[0]
-    scale = 1/m[-1]
-    m *= scale
-    s = np.std(d,axis=0)/(len(cumProbLick)**0.5)
-    s *= scale
-    ax.plot(t,m,color=clr,label=lbl)
-    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlim([0,0.75])
-ax.set_ylim([-0.05,1.05])
-ax.set_xlabel('Time from flash onset (s)')
-ax.set_ylabel('Normalized value')
-ax.legend(loc='lower right',fontsize=8)
-# ax.legend(loc='upper left',fontsize=8)
 plt.tight_layout()
 
 
