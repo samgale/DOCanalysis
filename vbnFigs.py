@@ -172,11 +172,11 @@ regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
 regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
 
 unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
-decodeWindowSampleSize = 10
+decodeWindowSampleSize = 20
 
 unitLickDecoding = {region: [] for region in regions}
 lickDecodingSampleSize = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_*.npy'))):
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','old','unitLickDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
@@ -218,7 +218,7 @@ for region,clr in zip(regions,regionColors):
         n = np.sum(~np.isnan(lickDecodingSampleSize[region]),axis=0)
         s = np.nanstd(lickDecodingSampleSize[region],axis=0)/(n**0.5)
         i = n>2
-        ax.plot(unitSampleSize[i],m[i],color=clr,label=region)
+        ax.plot(unitSampleSize[i],m[i],color=clr,label=region+' (n='+str(len(unitLickDecoding[region]))+')')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -233,13 +233,13 @@ plt.tight_layout()
 unitChangeDecoding = {region: [] for region in regions}
 changeDecodingSampleSize = {region: [] for region in regions}
 changeDecodingCorr = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','old','unitChangeDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     hit = d['hit']
     if hit.sum() >= 10:
         for region in regions:
-            decodeWindowSampleSize = 10 if region=='SC/MRN cluster 1' else 20
+            decodeWindowSampleSize = 20 if region=='SC/MRN cluster 1' else 20
             a = d[region][decodeWindowSampleSize]['accuracy']
             if len(a)>0:
                 unitChangeDecoding[region].append(a)
@@ -257,7 +257,7 @@ for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unit
                 if len(conf)>0:
                     changeDecodingCorr[region].append([np.corrcoef(hit,c[:hit.size])[0,1] for c in conf])
 
-fig = plt.figure()
+fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
 for region,clr in zip(regions,regionColors):
     if len(unitChangeDecoding[region])>0:
@@ -270,10 +270,10 @@ ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0.45,1])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Change decoding accuracy')
-ax.legend(loc='lower right',fontsize=8)
+ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
-fig = plt.figure()
+fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
 for region,clr in zip(regions,regionColors):
     if len(changeDecodingSampleSize[region])>0:
@@ -281,17 +281,17 @@ for region,clr in zip(regions,regionColors):
         n = np.sum(~np.isnan(changeDecodingSampleSize[region]),axis=0)
         s = np.nanstd(changeDecodingSampleSize[region],axis=0)/(n**0.5)
         i = n>2
-        ax.plot(unitSampleSize[i],m[i],color=clr,label=region)
+        ax.plot(unitSampleSize[i],m[i],color=clr,label=region+' (n='+str(len(unitChangeDecoding[region]))+')')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([0.45,1])
 ax.set_xlabel('Number of units')
 ax.set_ylabel('Change decoding accuracy')
-ax.legend(loc='lower right',fontsize=8)
+ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
-fig = plt.figure()
+fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
 for region,clr in zip(regions,regionColors):
     if len(changeDecodingCorr[region])>0:
@@ -304,7 +304,7 @@ ax.tick_params(direction='out',top=False,right=False)
 ax.set_ylim([-0.1,1])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Change decoder correlation with behavior')
-ax.legend(loc='upper left',fontsize=8)
+ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
 
@@ -316,8 +316,8 @@ respWin = slice(30,100)
 
 psthBinSize = 5
 psthTime = np.arange(0,750,psthBinSize)/1000
-psth = {region: [] for region in regions}
-psthUnitId = copy.deepcopy(psth)
+psth = {region: {lbl: [] for lbl in ('change','hit','miss','non-change lick','non-change no lick')} for region in regions}
+psthUnitId = {region: [] for region in regions}
 for sessionInd,sessionId in enumerate(sessionIds):
     print(sessionInd)
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -325,7 +325,13 @@ for sessionInd,sessionId in enumerate(sessionIds):
 
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-    nChange = changeFlashes.sum()
+    outcome = []
+    for lbl in ('hit','miss'):
+        a = stim[lbl].copy()
+        a[a.isnull()] = False
+        outcome.append(np.array(a).astype(bool))
+    hit = outcome[0] & changeFlashes
+    miss = outcome[1] & changeFlashes
     
     for region in regions:
         inRegion = getUnitsInRegion(units,region)
@@ -341,21 +347,47 @@ for sessionInd,sessionId in enumerate(sessionIds):
         hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
         nUnits = hasResp.sum()
         if nUnits > 0:
-            r = changeSp[hasResp].reshape(nUnits,nChange,-1,psthBinSize).mean(axis=-1)
-            psth[region].append(r.mean(axis=1))
+            for ind,lbl in zip((changeFlashes,hit,miss,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
+                               ('change','hit','miss','non-change lick','non-change no lick')):
+                nTrials = ind.sum()
+                if nTrials > 0:
+                    r = sp[hasResp][:,ind].reshape(nUnits,nTrials,-1,psthBinSize).mean(axis=-1)
+                    psth[region][lbl].append(r.mean(axis=1))
+                else:
+                    psth[region][lbl].append(np.full((nUnits,int(750/psthBinSize)),np.nan))
             psthUnitId[region].append(np.array(units.index[inRegion][hasResp]))
-        
 
-# cluster psth    
-mbPsth = np.concatenate(psth['SC']+psth['MRN'])
-clustData = mbPsth.copy()
+
+# cluster psth
+mbPsth = {lbl: np.concatenate(psth['SC'][lbl]+psth['MRN'][lbl]) for lbl in psth['SC']}
+clustData = mbPsth['change'].copy()
 clustData -= clustData[:,:int(10/psthBinSize)].mean(axis=1)[:,None]
 clustData /= clustData.max(axis=1)[:,None]
 clustId,linkageMat = cluster(clustData,nClusters=2,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=None)
 clustUnitId = np.concatenate(psthUnitId['SC']+psthUnitId['MRN'])
 
-np.save(os.path.join(outputDir,'sc_mrn_clusterId.npy'),clustId)
-np.save(os.path.join(outputDir,'sc_mrn_clusterUnitId.npy'),clustUnitId)
+# np.save(os.path.join(outputDir,'sc_mrn_clusterId.npy'),clustId)
+# np.save(os.path.join(outputDir,'sc_mrn_clusterUnitId.npy'),clustUnitId)
+
+for clust in (1,2):
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(list(mbPsth.keys())[1:],'grbk'):
+        d = mbPsth[lbl][clustId==clust]*1000
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d)/(len(d)**0.5)
+        ax.plot(psthTime,m,color=clr,label=lbl)
+        ax.fill_between(psthTime,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,0.75])
+    ax.set_xlabel('Time from flash onset (s)')
+    ax.set_ylabel('Spikes/s')
+    ax.legend(loc='upper right')
+    ax.set_title('SC/MRN cluster '+str(clust)+' (n='+str(len(d))+')')
+    plt.tight_layout()
+
 
 # V1 opto
 optoTime = np.concatenate(([0],np.array([50,83.33333333,116.66666667])/1000-0.5/60,[0.75]))
@@ -366,8 +398,8 @@ optoEffect = 1-np.array([0.07194244604316546,0.14545454545454545,0.5132743362831
 fig = plt.figure(figsize=(10,6))
 ax = fig.add_subplot(1,1,1)
 include = (0,1,2,3,4,5,6,7)
-for i,(d,t,clr,lbl) in enumerate(zip((np.concatenate(psth['VISp']),unitChangeDecoding['VISp'],optoEffect,
-                                      mbPsth[clustId==1],mbPsth[clustId==2],unitLickDecoding['SC/MRN cluster 1'],
+for i,(d,t,clr,lbl) in enumerate(zip((np.concatenate(psth['VISp']['change']),unitChangeDecoding['VISp'],optoEffect,
+                                      mbPsth['change'][clustId==1],mbPsth['change'][clustId==2],unitLickDecoding['SC/MRN cluster 1'],
                                       facemapLickDecoding,cumProbLick),
                                      (psthTime,unitDecodingTime,optoTime,
                                       psthTime,psthTime,unitDecodingTime,
@@ -398,7 +430,6 @@ ax.set_xlim([0,0.75])
 ax.set_ylim([-0.2,1.1])
 ax.set_xlabel('Time from flash onset (s)')
 ax.set_ylabel('Normalized value')
-ax.legend(loc='lower right',fontsize=8)
 ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
@@ -406,7 +437,7 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall','VISp') #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC','MRN')
+regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
@@ -475,28 +506,24 @@ for i,f in enumerate(filePaths):
 
 # plot mean spike rate
 for flashes in flashLabels:
-    fig = plt.figure(figsize=(8,8))
-    fig.suptitle(flashes)
-    for i,region in enumerate(regions):
-        ax = fig.add_subplot(len(regions),1,i+1)
-        for lbl,clr in zip(imageTypeLabels,imageTypeColors):
-            d = np.array(spikeRate[region][flashes][lbl])
-            m = np.nanmean(d,axis=0)
-            n = np.sum(~np.isnan(d[:,0]))
-            s = np.nanstd(d,axis=0)/(n**0.5)
-            ax.plot(t[1:],m,color=clr,label=lbl+' (n='+str(n)+')')
-            ax.fill_between(t[1:],m+s,m-s,color=clr,alpha=0.25)
-        for side in ('right','top'):
-            ax.spines[side].set_visible(False)
-        ax.tick_params(direction='out',top=False,right=False)
-        ax.set_xlim([0,t[-1]])
-        if i==len(regions)-1:
-            ax.set_xlabel('Time from change (ms)')
-        else:
-            ax.set_xticklabels([])
-        ax.set_ylabel('Spikes/s')
-        ax.set_title(region)
-        ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+        d = np.array(spikeRate[region][flashes][lbl])
+        m = np.nanmean(d,axis=0)
+        n = np.sum(~np.isnan(d[:,0]))
+        s = np.nanstd(d,axis=0)/(n**0.5)
+        ax.plot(t[1:],m,color=clr,label=lbl+' (n='+str(n)+')')
+        ax.fill_between(t[1:],m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,t[-1]])
+    ax.set_ylim([-1,16])
+    ax.set_xlabel('Time from flash onset (ms)')
+    ax.set_ylabel('Spikes/s')
+    ax.set_title(region+', '+flashes)
+    ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
     plt.tight_layout()
 
 
@@ -504,7 +531,7 @@ for flashes in flashLabels:
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(len(flashLabels))
-for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
     for flashes in flashLabels:
@@ -528,7 +555,7 @@ plt.tight_layout()
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
-for lbl,clr in zip(imageTypeLabels,imageTypeColors):
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
     for flashes in flashLabels:
@@ -547,99 +574,84 @@ ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
 # ax.set_ylim([350,500])
 ax.set_ylabel('Response time (ms)')
 ax.set_title('Mice')
+ax.legend()
 plt.tight_layout()
 
 
 # plot integrator value
 for flashes in flashLabels:
-    fig = plt.figure(figsize=(8,8))
-    fig.suptitle(flashes)
-    for i,region in enumerate(regions):
-        ax = fig.add_subplot(len(regions),1,i+1)
-        for lbl,clr in zip(imageTypeLabels,imageTypeColors):
-            d = np.array(integrator[region][flashes][lbl])
-            d /= np.mean(threshold[region][lbl],axis=1)[:,None]
-            m = np.nanmean(d,axis=0)
-            n = np.sum(~np.isnan(d[:,0]))
-            s = np.nanstd(d,axis=0)/(n**0.5)
-            ax.plot(t,m,color=clr,label=lbl+' (n='+str(n)+')')
-            ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
-        for side in ('right','top'):
-            ax.spines[side].set_visible(False)
-        ax.tick_params(direction='out',top=False,right=False)
-        ax.set_xlim([0,t[-1]])
-        if i==len(regions)-1:
-            ax.set_xlabel('Time from change (ms)')
-        else:
-            ax.set_xticklabels([])
-        if i==len(regions)//2-1:
-            ax.set_ylabel('Integrator value relative to threshold')
-        ax.set_title(region)
-        ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+        d = np.array(integrator[region][flashes][lbl])
+        d /= np.mean(threshold[region][lbl],axis=1)[:,None]
+        m = np.nanmean(d,axis=0)
+        n = np.sum(~np.isnan(d[:,0]))
+        s = np.nanstd(d,axis=0)/(n**0.5)
+        ax.plot(t,m,color=clr,label=lbl+' (n='+str(n)+')')
+        ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,t[-1]])
+    ax.set_yticks([0,1])
+    ax.set_ylim([-0.05,1.3])
+    ax.set_xlabel('Time from change (ms)')
+    ax.set_ylabel('Integrator value relative to threshold')
+    ax.set_title(region+', '+flashes)
+    ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
     plt.tight_layout()
 
 
 # plot model response rate and decision time
-fig = plt.figure(figsize=(8,10))
+fig = plt.figure()
 xticks = np.arange(len(flashLabels))
-for i,region in enumerate(regions):
-    ax = fig.add_subplot(len(regions),1,i+1)
-    for lbl,clr in zip(imageTypeLabels,imageTypeColors):
-        mean = []
-        sem = []
-        for flashes in flashLabels:
-            d = [r.sum()/r.size for r in respModel[region][flashes][lbl]]
-            mean.append(np.nanmean(d))
-            sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
-        ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
-        for x,m,s in zip(xticks,mean,sem):
-            ax.plot([x,x],[m-s,m+s],color=clr)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xticks(xticks)
-    if i==len(regions)-1:
-        ax.set_xticklabels(flashLabels)
-    else:
-        ax.set_xticklabels([])
-    ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-    ax.set_ylim([0,1])
-    if i==len(regions)//2-1:
-        ax.set_ylabel('Response rate')
-    ax.set_title(region)
-    if i==0:
-        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+    mean = []
+    sem = []
+    for flashes in flashLabels:
+        d = [r.sum()/r.size for r in respModel[region][flashes][lbl]]
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(flashLabels)
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+ax.set_ylim([0,1])
+ax.set_ylabel('Response rate')
+ax.set_title('Model')
+ax.legend()
 plt.tight_layout()
 
-fig = plt.figure(figsize=(8,10))
+fig = plt.figure()
 xticks = np.arange(len(flashLabels))
-for i,region in enumerate(regions):
-    ax = fig.add_subplot(len(regions),1,i+1)
-    for lbl,clr in zip(imageTypeLabels,imageTypeColors):
-        mean = []
-        sem = []
-        for flashes in flashLabels:
-            d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]]
-            mean.append(np.nanmean(d))
-            sem.append(np.nanstd(d)/(len(d)**0.5))
-        ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
-        for x,m,s in zip(xticks,mean,sem):
-            ax.plot([x,x],[m-s,m+s],color=clr)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xticks(xticks)
-    if i==len(regions)-1:
-        ax.set_xticklabels(flashLabels)
-    else:
-        ax.set_xticklabels([])
-    ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-    ax.set_ylim([75,150])
-    if i==len(regions)//2-1:
-        ax.set_ylabel('Decision time (ms)')
-    ax.set_title(region)
-    if i==0:
-        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+    mean = []
+    sem = []
+    for flashes in flashLabels:
+        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]]
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(len(d)**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(flashLabels)
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+#ax.set_ylim([75,150])
+ax.set_ylabel('Decision time (ms)')
+ax.set_title('Model')
+ax.legend()
 plt.tight_layout()
 
 
@@ -663,54 +675,40 @@ for lbl,clr in zip(('familiar','novel'),'gm'):
     ax.plot([mx,mx],[my-sy,my+sy],color=clr)
 ax.set_xlabel('leak')
 ax.set_ylabel('threshold')
-ax.set_title('model accuracy')
+ax.set_title('average model accuracy')
 cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
 plt.tight_layout()
 
-fig = plt.figure(figsize=(6,8))
-for i,region in enumerate(regions):
-    ax = fig.add_subplot(len(regions),1,i+1)
-    for lbl,clr in zip(('familiar','novel'),'gm'):
-        thresh = np.mean(threshold[region][lbl],axis=1) 
-        thresh *= np.array(maxSpikeRate[region][lbl])/1000
-        dsort = np.sort(thresh)
-        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
-        ax.plot(dsort,cumProb,color=clr,label=lbl)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_ylim([0,1.01])
-    if i==len(regions)-1:
-        ax.set_xlabel('Integrator threshold (spikes/neuron)')
-    else:
-        ax.set_xticklabels([])
-    if i==len(regions)//2-1:
-        ax.set_ylabel('Cumulative probability')
-    ax.set_title(region)
-    if i==0:
-        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(('familiar','novel'),'gm'):
+    thresh = np.mean(threshold[region][lbl],axis=1) 
+    thresh *= np.array(maxSpikeRate[region][lbl])/1000
+    dsort = np.sort(thresh)
+    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+    ax.plot(dsort,cumProb,color=clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Integrator threshold (spikes/neuron)')
+ax.set_ylabel('Cumulative probability')
+ax.legend()
 plt.tight_layout()
 
-fig = plt.figure(figsize=(6,8))
-for i,region in enumerate(regions):
-    ax = fig.add_subplot(len(regions),1,i+1)
-    for lbl,clr in zip(('familiar','novel'),'gm'):
-        dsort = np.sort(np.mean(leak[region][lbl],axis=1))
-        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
-        ax.plot(dsort,cumProb,color=clr,label=lbl)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_ylim([0,1.01])
-    if i==len(regions)-1:
-        ax.set_xlabel('Integrator leak')
-    else:
-        ax.set_xticklabels([])
-    if i==len(regions)//2-1:
-        ax.set_ylabel('Cumulative probability')
-    ax.set_title(region)
-    if i==0:
-        ax.legend(bbox_to_anchor=(1,1),loc='upper left')
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(('familiar','novel'),'gm'):
+    dsort = np.sort(np.mean(leak[region][lbl],axis=1))
+    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+    ax.plot(dsort,cumProb,color=clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Integrator leak')
+ax.set_ylabel('Cumulative probability')
+ax.legend()
 plt.tight_layout()
 
 
@@ -937,10 +935,36 @@ for imgSet in ('G','H'):
 
 
 # example session
-f = filePaths[0]
-with h5py.File(f,'r') as d:
-    pass
+i = 0
+for f in filePaths[-1:0:-1]:
+    with h5py.File(f,'r') as d:
+        novel = d['novel'][()]
+        if len(d[region])>0 and np.any(novel) and d['hit'][()].sum()>10:
+            thresh = np.mean(d[region]['threshold'][()])
+            intg = d[region]['integrator'][()]
+            flashInd = d['change'][()]
+            exampleIntegrator = {}
+            for ind,lbl in zip(((flashInd & ~novel),(flashInd & novel)),('familiar','novel')):
+                exampleIntegrator[lbl] = intg[ind]/thresh
 
-
-
+            fig = plt.figure()
+            ax = fig.add_subplot(1,1,1)
+            ax.plot([0,t[-1]],[1,1],'--',color='0.5')
+            for lbl,clr in zip(('familiar','novel'),'gm'):
+                for j,y in enumerate(exampleIntegrator[lbl]):
+                    lb = lbl if j==0 else None
+                    ax.plot(t,y,color=clr,alpha=0.2,label=lb)
+            for side in ('right','top'):
+                ax.spines[side].set_visible(False)
+            ax.tick_params(direction='out',top=False,right=False)
+            ax.set_xlim([0,t[-1]])
+            ax.set_xlabel('Time from change (ms)')
+            ax.set_ylabel('Integrator value relative to threshold')
+            ax.legend(loc='upper left')
+            ax.set_title(os.path.basename(f))
+            plt.tight_layout()
+            
+            i += 1
+            if i>=20:
+                break
 
