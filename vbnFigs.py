@@ -309,7 +309,7 @@ plt.tight_layout()
 
 
 # psth
-regions = ('VISp','SC','MRN')
+regions = ('VISall','VISp','SC','MRN')
 
 baseWin = slice(680,750)
 respWin = slice(30,100)
@@ -356,6 +356,25 @@ for sessionInd,sessionId in enumerate(sessionIds):
                 else:
                     psth[region][lbl].append(np.full((nUnits,int(750/psthBinSize)),np.nan))
             psthUnitId[region].append(np.array(units.index[inRegion][hasResp]))
+            
+for region in regions:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(list(psth[region].keys())[1:],'grbk'):
+        d = np.concatenate(psth[region][lbl])*1000
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d)/(len(d)**0.5)
+        ax.plot(psthTime,m,color=clr,label=lbl)
+        ax.fill_between(psthTime,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,0.75])
+    ax.set_xlabel('Time from flash onset (s)')
+    ax.set_ylabel('Spikes/s')
+    ax.legend(loc='upper right')
+    ax.set_title(region + ' (n='+str(len(d))+')')
+    plt.tight_layout()
 
 
 # cluster psth
@@ -437,24 +456,24 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
+regions = ('VISall weighted',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-t = np.arange(150) 
+t = np.arange(-100,150) 
 
 respMice = {flashes: {lbl: [] for lbl in imageTypeLabels} for flashes in flashLabels}
 respTimeMice = copy.deepcopy(respMice)
 respMiceRegions = {region: {flashes: {lbl: [] for lbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
 respTimeMiceRegions = copy.deepcopy(respMiceRegions)
-spikeRate = copy.deepcopy(respMiceRegions)
+integratorInput = copy.deepcopy(respMiceRegions)
 integrator = copy.deepcopy(respMiceRegions)
 respModel = copy.deepcopy(respMiceRegions)
 respTimeModel = copy.deepcopy(respMiceRegions)
 imageNames = copy.deepcopy(respMiceRegions)
 leak = {region: {lbl: [] for lbl in imageTypeLabels} for region in regions}
 threshold = copy.deepcopy(leak)
-maxSpikeRate = copy.deepcopy(leak)
+inputNorm = copy.deepcopy(leak)
 novelSession = {region: [] for region in regions}
 modelAccuracy = copy.deepcopy(novelSession)
 trainAccuracy = copy.deepcopy(novelSession)
@@ -476,7 +495,7 @@ for i,f in enumerate(filePaths):
                 trainAccuracy[region].append(d[region]['trainAccuracy'][()])
                 for decoder in ('allUnits','populationAverage'):
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
-                spRate = d[region]['spikeRate'][()]
+                intgInput = d[region]['input'][()]
                 intg = d[region]['integrator'][()]
             for k,flashes in enumerate(flashLabels):
                 flashInd = d[flashes][()]
@@ -493,7 +512,7 @@ for i,f in enumerate(filePaths):
                     if len(d[region]) > 0:
                         respMiceRegions[region][flashes][lbl].append(d['lick'][ind])
                         respTimeMiceRegions[region][flashes][lbl].append(d['lickLatency'][ind])
-                        spikeRate[region][flashes][lbl].append(spRate[ind].mean(axis=0))
+                        integratorInput[region][flashes][lbl].append(intgInput[ind].mean(axis=0))
                         integrator[region][flashes][lbl].append(intg[ind].mean(axis=0))
                         respModel[region][flashes][lbl].append(d[region]['modelResp'][ind])
                         respTimeModel[region][flashes][lbl].append(d[region]['modelRespTime'][ind])
@@ -501,7 +520,7 @@ for i,f in enumerate(filePaths):
                         if k==0:
                             leak[region][lbl].append(d[region]['leak'][()])
                             threshold[region][lbl].append(d[region]['threshold'][()])
-                            maxSpikeRate[region][lbl].append(d[region]['maxSpikeRate'][()])
+                            inputNorm[region][lbl].append(d[region]['inputNormFactor'][()])
 
 
 # plot mean spike rate
@@ -509,12 +528,12 @@ for flashes in flashLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        d = np.array(spikeRate[region][flashes][lbl])
+        d = np.array(integratorInput[region][flashes][lbl])
         m = np.nanmean(d,axis=0)
         n = np.sum(~np.isnan(d[:,0]))
         s = np.nanstd(d,axis=0)/(n**0.5)
-        ax.plot(t[1:],m,color=clr,label=lbl+' (n='+str(n)+')')
-        ax.fill_between(t[1:],m+s,m-s,color=clr,alpha=0.25)
+        ax.plot(t,m,color=clr,label=lbl+' (n='+str(n)+')')
+        ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -683,7 +702,7 @@ fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(('familiar','novel'),'gm'):
     thresh = np.mean(threshold[region][lbl],axis=1) 
-    thresh *= np.array(maxSpikeRate[region][lbl])/1000
+    thresh *= np.array(inputNorm[region][lbl])
     dsort = np.sort(thresh)
     cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
     ax.plot(dsort,cumProb,color=clr,label=lbl)
@@ -768,7 +787,7 @@ plt.tight_layout()
 
 
 # correlation of model and mouse responses and response times
-region = 'VISall'
+region = 'VISall weighted'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
@@ -879,7 +898,7 @@ plt.tight_layout()
 
 
 # image response matrix
-region = 'VISall'
+region = 'VISall weighted'
 
 images = {'G': ['im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'],
           'H': ['im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r']}
