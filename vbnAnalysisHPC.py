@@ -11,6 +11,7 @@ import os
 import warnings
 import numpy as np
 import pandas as pd
+import scipy.optimize
 import scipy.stats
 import h5py
 import sklearn
@@ -310,13 +311,14 @@ def decodeChange(sessionId):
 
 
 def fitIntegratorModel(sessionId):
-    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
+    regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
     nCrossVal = 5
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
+    tStart = -100
     tEnd = 150
-    leakRange= np.arange(0,1.01,0.01)
+    leakRange= np.arange(0.01,1.01,0.01)
     thresholdRange = np.arange(0.1,10.1,0.1)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -354,6 +356,23 @@ def fitIntegratorModel(sessionId):
     d['falseAlarm'] = outcome[2] & catchFlashes
     d['correctReject'] = outcome[3] & catchFlashes
 
+    y = np.full(nFlash,np.nan)
+    y[changeFlashes] = 1
+    y[preChangeFlashes] = 0
+    samplesPerClassPerSplit = round(nChange/nCrossVal)
+    shuffleInd = np.random.permutation(np.where(changeFlashes | preChangeFlashes)[0])
+    trainInd = []
+    testInd = []
+    for k in range(nCrossVal):
+        testInd.append([])
+        for val in (0,1):
+            i = k*samplesPerClassPerSplit
+            ind = shuffleInd[y[shuffleInd]==val]
+            testInd[-1].extend(ind[i:i+samplesPerClassPerSplit] if k<nCrossVal-1 else ind[i:])
+        trainInd.append(np.setdiff1d(shuffleInd,testInd[-1]))
+    trainInd.append(shuffleInd)
+    testInd.append(np.where(~changeFlashes & ~preChangeFlashes)[0])
+
     warnings.filterwarnings('ignore')
     for region in regions:
         inRegion = getUnitsInRegion(units,region,rs=True)
@@ -372,74 +391,13 @@ def fitIntegratorModel(sessionId):
             continue
         d[region]['nUnits'] = nUnits
         
-        flashSp = sp[hasResp].mean(axis=0)
-        baseSpRate = flashSp[:,baseWin].mean(axis=1)
-        baseSpRate[1:] = baseSpRate[:-1]
-        flashSp -= baseSpRate[:,None]
-        flashSp = flashSp[:,1:tEnd]
-        maxSpRate = flashSp[changeFlashes | preChangeFlashes].max()
-        d[region]['spikeRate'] = flashSp*1000
-        d[region]['baseSpikeRate'] = baseSpRate[changeFlashes].mean()*1000
-        d[region]['maxSpikeRate'] = maxSpRate*1000
-        flashSp /= maxSpRate
-        
-        y = np.full(nFlash,np.nan)
-        y[changeFlashes] = 1
-        y[preChangeFlashes] = 0
-        samplesPerClassPerSplit = round(nChange/nCrossVal)
-        shuffleInd = np.random.permutation(np.where(changeFlashes | preChangeFlashes)[0])
-        leakFit = np.zeros(nCrossVal+1)
-        thresholdFit = np.zeros(nCrossVal+1)
-        trainAccuracy = np.zeros((nCrossVal+1,leakRange.size,thresholdRange.size))
-        integrator = np.zeros((nFlash,tEnd))
-        modelResp = np.zeros(nFlash)
-        modelRespTime = np.full(nFlash,np.nan)
-        trainInd = []
-        testInd = []
-        for k in range(nCrossVal):
-            testInd.append([])
-            for val in (0,1):
-                i = k*samplesPerClassPerSplit
-                ind = shuffleInd[y[shuffleInd]==val]
-                testInd[-1].extend(ind[i:i+samplesPerClassPerSplit] if k<nCrossVal-1 else ind[i:])
-            trainInd.append(np.setdiff1d(shuffleInd,testInd[-1]))
-        trainInd.append(shuffleInd)
-        testInd.append(np.where(~changeFlashes & ~preChangeFlashes)[0])
-        for k,(train,test) in enumerate(zip(trainInd,testInd)):
-            for i,leak in enumerate(leakRange):
-                for j,thresh in enumerate(thresholdRange):
-                    prediction = np.zeros(len(train))
-                    for trial,trialSp in enumerate(flashSp[train]):
-                        v = 0
-                        for s in trialSp:
-                            v += s - leak*v
-                            if v > thresh:
-                                prediction[trial] = 1
-                                break
-                    trainAccuracy[k,i,j] = sklearn.metrics.accuracy_score(y[train],prediction)
-            i,j = np.unravel_index(np.argmax(trainAccuracy[k]),trainAccuracy[k].shape)
-            leakFit[k] = leakRange[i]
-            thresholdFit[k] = thresholdRange[j]
-            for trial,trialSp in zip(test,flashSp[test]):
-                for t,s in enumerate(trialSp):
-                    integrator[trial,t+1] = integrator[trial,t] + s - leakFit[k]*integrator[trial,t]
-                    if integrator[trial,t+1] > thresholdFit[k]:
-                        modelResp[trial] = 1
-                        modelRespTime[trial] = t+1
-        d[region]['leak'] = leakFit
-        d[region]['threshold'] = thresholdFit
-        d[region]['trainAccuracy'] = trainAccuracy
-        d[region]['integrator'] = integrator
-        d[region]['modelResp'] = modelResp
-        d[region]['modelRespTime'] = modelRespTime
-        d[region]['modelAccuracy'] = sklearn.metrics.accuracy_score(y[shuffleInd],modelResp[shuffleInd])
-        
         d[region]['decoderTrainAccuracy'] = {}
         d[region]['decoderWeights'] = {}
         d[region]['decoderAccuracy'] = {}
         d[region]['decoderPrediction'] = {}
         d[region]['decoderConfidence'] = {}
-        for X,lbl in zip((flashSp,sp[hasResp,:,:tEnd].transpose(1,0,2).reshape((nFlash,-1))),('populationAverage','allUnits')):              
+        for X,lbl in zip((sp[hasResp,:,:tEnd].mean(axis=0),sp[hasResp,:,:tEnd].sum(axis=-1).T,sp[hasResp,:,:tEnd].transpose(1,0,2).reshape((nFlash,-1))),
+                         ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')):              
             decoderTrainAccuracy = np.zeros(nCrossVal+1)
             decoderWeights = np.zeros((nCrossVal+1,X.shape[1]))
             decoderAccuracy = np.zeros(nCrossVal)
@@ -459,6 +417,72 @@ def fitIntegratorModel(sessionId):
             d[region]['decoderAccuracy'][lbl] = decoderAccuracy
             d[region]['decoderPrediction'][lbl] = decoderPrediction
             d[region]['decoderConfidence'][lbl] = decoderConfidence
+
+        if 'weighted' in region:
+            w = d[region]['decoderWeights']['allUnitSpikeCount'].mean(axis=0)
+            flashSp = np.mean(sp[hasResp]*w[:,None,None],axis=0)
+        else:
+            flashSp = sp[hasResp].mean(axis=0)
+        flashSp = np.concatenate((np.concatenate((flashSp[0,tStart:][None,:],flashSp[:-1,tStart:]),axis=0),flashSp[:,:tEnd]),axis=1)
+        inputNorm = np.percentile(flashSp[changeFlashes | preChangeFlashes],95)
+        flashSp /= inputNorm
+        d[region]['input'] = flashSp
+        d[region]['inputNormFactor'] = inputNorm
+
+        leakFit = np.zeros(nCrossVal+1)
+        thresholdFit = np.zeros(nCrossVal+1)
+        trainAccuracy = np.zeros((nCrossVal+1,leakRange.size,thresholdRange.size))
+        integrator = np.zeros((nFlash,tEnd-tStart))
+        modelResp = np.zeros(nFlash)
+        modelRespTime = np.full(nFlash,np.nan)
+        for k,(train,test) in enumerate(zip(trainInd,testInd)):
+            def fitAccumulator(x,*args):
+                leak,thresh = x
+                inputSp,response = args
+                for trial,trialSp in enumerate(inputSp):
+                    prediction = np.zeros(len(response))
+                    v = 0
+                    for s in trialSp:
+                        v += s - leak*v
+                        if v > thresh:
+                            prediction[trial] = 1
+                            break
+                return 1-sklearn.metrics.accuracy_score(response,prediction)
+            fit = scipy.optimize.minimize(fitAccumulator,np.array([0.1,2]),args=(flashSp[train],y[train]))
+            print(fit.x)
+            print(fit.success)
+            print(fit.message)
+            print(fit.fun)
+            leakFit[k],thresholdFit[k] = fit['x']
+            # for i,leak in enumerate(leakRange):
+            #     for j,thresh in enumerate(thresholdRange):
+            #         prediction = np.zeros(len(train))
+            #         for trial,trialSp in enumerate(flashSp[train]):
+            #             v = 0
+            #             for s in trialSp:
+            #                 v += s - leak*v
+            #                 if v > thresh:
+            #                     prediction[trial] = 1
+            #                     break
+            #         trainAccuracy[k,i,j] = sklearn.metrics.accuracy_score(y[train],prediction)
+            # i,j = np.unravel_index(np.argmax(trainAccuracy[k]),trainAccuracy[k].shape)
+            # leakFit[k] = leakRange[i]
+            # thresholdFit[k] = thresholdRange[j]
+            for trial,trialSp in zip(test,flashSp[test]):
+                for t,s in enumerate(trialSp):
+                    integrator[trial,t] += s
+                    if t > 0:
+                        integrator[trial,t] += integrator[trial,t-1] - leakFit[k]*integrator[trial,t-1]
+                    if integrator[trial,t] > thresholdFit[k]:
+                        modelResp[trial] = 1
+                        modelRespTime[trial] = t
+        d[region]['leak'] = leakFit
+        d[region]['threshold'] = thresholdFit
+        d[region]['trainAccuracy'] = trainAccuracy
+        d[region]['integrator'] = integrator
+        d[region]['modelResp'] = modelResp
+        d[region]['modelRespTime'] = modelRespTime
+        d[region]['modelAccuracy'] = sklearn.metrics.accuracy_score(y[shuffleInd],modelResp[shuffleInd])
     warnings.filterwarnings('default')
 
     h5File = h5py.File(os.path.join(outputDir,'integratorModel','integratorModel_'+str(sessionId)+'.hdf5'),'w')
@@ -473,6 +497,6 @@ if __name__ == "__main__":
     sessionId = args.sessionId
     #runFacemap(sessionId)
     #decodeLicksFromFacemap(sessionId)
-    decodeLicksFromUnits(sessionId)
-    decodeChange(sessionId)
-    #fitIntegratorModel(sessionId)
+    #decodeLicksFromUnits(sessionId)
+    #decodeChange(sessionId)
+    fitIntegratorModel(sessionId)

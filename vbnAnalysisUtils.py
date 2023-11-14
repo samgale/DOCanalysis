@@ -75,6 +75,8 @@ def getUnitsInRegion(units,region,rs=False,fs=False):
         u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
         inRegion = np.in1d(units.index,u)
     else:
+        if 'weighted' in region:
+            region = region[:region.find(' weighted')]
         if region=='VISall':
             reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
         elif region=='SC':
