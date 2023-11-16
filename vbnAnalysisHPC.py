@@ -17,7 +17,7 @@ import h5py
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
-from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInRegion, findResponsiveUnits, trainDecoder
+from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInRegion, findResponsiveUnits, getTrainTestSplits, trainDecoder, fitAccumulator, runAccumulator
 
 
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
@@ -313,6 +313,7 @@ def decodeChange(sessionId):
 def fitIntegratorModel(sessionId):
     regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
     nCrossVal = 5
+    nShuffles = 10
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -330,6 +331,19 @@ def fitIntegratorModel(sessionId):
     preChangeFlashes = np.concatenate((changeFlashes[1:],[False]))
     nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
+
+    outcome = []
+    for lbl in ('hit','miss','false_alarm','correct_reject'):
+        a = stim[lbl].copy()
+        a[a.isnull()] = False
+        outcome.append(np.array(a).astype(bool))
+    hit,miss,falseAlarm,correctReject = outcome
+    hit = hit & changeFlashes
+    miss = miss & changeFlashes
+    falseAlarm = falseAlarm & catchFlashes
+    correctReject = correctReject & catchFlashes
+    if hit.sum() < nCrossVal or miss.sum() < nCrossVal:
+        return
     
     d = {region: {} for region in regions}
     d['sessionId'] = sessionId
@@ -346,32 +360,21 @@ def fitIntegratorModel(sessionId):
     d['novel'] = novelFlashes
     d['lick'] = lick
     d['lickLatency'] = lickTimes - flashTimes
-    outcome = []
-    for lbl in ('hit','miss','false_alarm','correct_reject'):
-        a = stim[lbl].copy()
-        a[a.isnull()] = False
-        outcome.append(np.array(a).astype(bool))
-    d['hit'] = outcome[0] & changeFlashes
-    d['miss'] = outcome[1] & changeFlashes
-    d['falseAlarm'] = outcome[2] & catchFlashes
-    d['correctReject'] = outcome[3] & catchFlashes
+    d['hit'] = hit & changeFlashes
+    d['miss'] = miss & changeFlashes
+    d['falseAlarm'] = falseAlarm & catchFlashes
+    d['correctReject'] = correctReject & catchFlashes
 
-    y = np.full(nFlash,np.nan)
-    y[changeFlashes] = 1
-    y[preChangeFlashes] = 0
-    samplesPerClassPerSplit = round(nChange/nCrossVal)
-    shuffleInd = np.random.permutation(np.where(changeFlashes | preChangeFlashes)[0])
-    trainInd = []
-    testInd = []
-    for k in range(nCrossVal):
-        testInd.append([])
-        for val in (0,1):
-            i = k*samplesPerClassPerSplit
-            ind = shuffleInd[y[shuffleInd]==val]
-            testInd[-1].extend(ind[i:i+samplesPerClassPerSplit] if k<nCrossVal-1 else ind[i:])
-        trainInd.append(np.setdiff1d(shuffleInd,testInd[-1]))
-    trainInd.append(shuffleInd)
-    testInd.append(np.where(~changeFlashes & ~preChangeFlashes)[0])
+    y = {}
+    trainInd = {}
+    testInd = {}
+    for go,nogo,lbl in zip((changeFlashes,hit),(preChangeFlashes,miss),('change','hit')):
+        y[lbl] = np.full(nFlash,np.nan)
+        y[lbl][go] = 1
+        y[lbl][nogo] = 0
+        trainInd[lbl],testInd[lbl] = getTrainTestSplits(y[lbl],nCrossVal)
+        trainInd[lbl].append(np.where(~np.isnan(y[lbl]))[0])
+        testInd[lbl].append(np.where(np.isnan(y[lbl]))[0])
 
     warnings.filterwarnings('ignore')
     for region in regions:
@@ -403,13 +406,13 @@ def fitIntegratorModel(sessionId):
             decoderAccuracy = np.zeros(nCrossVal)
             decoderPrediction = np.zeros(nFlash)
             decoderConfidence = np.zeros(nFlash)
-            for k,(train,test) in enumerate(zip(trainInd,testInd)):
+            for k,(train,test) in enumerate(zip(trainInd['change'],testInd['change'])):
                 decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
-                decoder.fit(X[train],y[train])
-                decoderTrainAccuracy[k] = decoder.score(X[train],y[train])
+                decoder.fit(X[train],y['change'][train])
+                decoderTrainAccuracy[k] = decoder.score(X[train],y['change'][train])
                 decoderWeights[k] = np.squeeze(decoder.coef_)
                 if k < nCrossVal:
-                    decoderAccuracy[k] = decoder.score(X[test],y[test])
+                    decoderAccuracy[k] = decoder.score(X[test],y['change'][test])
                 decoderPrediction[test] = decoder.predict(X[test])
                 decoderConfidence[test] = decoder.decision_function(X[test])
             d[region]['decoderTrainAccuracy'][lbl] = decoderTrainAccuracy
@@ -426,63 +429,43 @@ def fitIntegratorModel(sessionId):
         flashSp = np.concatenate((np.concatenate((flashSp[0,tStart:][None,:],flashSp[:-1,tStart:]),axis=0),flashSp[:,:tEnd]),axis=1)
         inputNorm = np.percentile(flashSp[changeFlashes | preChangeFlashes],95)
         flashSp /= inputNorm
-        d[region]['input'] = flashSp
+        d[region]['integratorInput'] = flashSp
         d[region]['inputNormFactor'] = inputNorm
 
-        leakFit = np.zeros(nCrossVal+1)
-        thresholdFit = np.zeros(nCrossVal+1)
-        trainAccuracy = np.zeros((nCrossVal+1,leakRange.size,thresholdRange.size))
-        integrator = np.zeros((nFlash,tEnd-tStart))
-        modelResp = np.zeros(nFlash)
-        modelRespTime = np.full(nFlash,np.nan)
-        for k,(train,test) in enumerate(zip(trainInd,testInd)):
-            def fitAccumulator(x,*args):
-                leak,thresh = x
-                inputSp,response = args
-                for trial,trialSp in enumerate(inputSp):
-                    prediction = np.zeros(len(response))
-                    v = 0
-                    for s in trialSp:
-                        v += s - leak*v
-                        if v > thresh:
-                            prediction[trial] = 1
-                            break
-                return 1-sklearn.metrics.accuracy_score(response,prediction)
-            fit = scipy.optimize.minimize(fitAccumulator,np.array([0.1,2]),args=(flashSp[train],y[train]))
-            print(fit.x)
-            print(fit.success)
-            print(fit.message)
-            print(fit.fun)
-            leakFit[k],thresholdFit[k] = fit['x']
-            # for i,leak in enumerate(leakRange):
-            #     for j,thresh in enumerate(thresholdRange):
-            #         prediction = np.zeros(len(train))
-            #         for trial,trialSp in enumerate(flashSp[train]):
-            #             v = 0
-            #             for s in trialSp:
-            #                 v += s - leak*v
-            #                 if v > thresh:
-            #                     prediction[trial] = 1
-            #                     break
-            #         trainAccuracy[k,i,j] = sklearn.metrics.accuracy_score(y[train],prediction)
-            # i,j = np.unravel_index(np.argmax(trainAccuracy[k]),trainAccuracy[k].shape)
-            # leakFit[k] = leakRange[i]
-            # thresholdFit[k] = thresholdRange[j]
-            for trial,trialSp in zip(test,flashSp[test]):
-                for t,s in enumerate(trialSp):
-                    integrator[trial,t] += s
-                    if t > 0:
-                        integrator[trial,t] += integrator[trial,t-1] - leakFit[k]*integrator[trial,t-1]
-                    if integrator[trial,t] > thresholdFit[k]:
-                        modelResp[trial] = 1
-                        modelRespTime[trial] = t
-        d[region]['leak'] = leakFit
-        d[region]['threshold'] = thresholdFit
-        d[region]['trainAccuracy'] = trainAccuracy
-        d[region]['integrator'] = integrator
-        d[region]['modelResp'] = modelResp
-        d[region]['modelRespTime'] = modelRespTime
-        d[region]['modelAccuracy'] = sklearn.metrics.accuracy_score(y[shuffleInd],modelResp[shuffleInd])
+        d[region]['leak'] = {}
+        d[region]['threshold'] = {}
+        d[region]['integratorTrainAccuracy'] = {}
+        d[region]['integratorValue'] = {}
+        d[region]['integratorResp'] = {}
+        d[region]['integratorRespTime'] = {}
+        d[region]['integratorAccuracy'] = {}
+        d[region]['shuffledAccuracy'] = {}
+        for lbl in ('change','hit'):
+            leakFit = np.zeros(nCrossVal+1)
+            thresholdFit = np.zeros(nCrossVal+1)
+            integratorTrainAccuracy = np.full((nCrossVal+1,leakRange.size,thresholdRange.size),np.nan)
+            integratorValue = np.full((nFlash,tEnd-tStart),np.nan)
+            integratorResp = np.full(nFlash,np.nan)
+            integratorRespTime = np.full(nFlash,np.nan)
+            for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
+                leakFit[k],thresholdFit[k],integratorTrainAccuracy[k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange)
+                integratorResp[test],integratorRespTime[test],integratorValue[test] = runAccumulator(flashSp[test],leakFit[k],thresholdFit[k])
+            d[region]['leak'][lbl] = leakFit
+            d[region]['threshold'][lbl] = thresholdFit
+            d[region]['integratorTrainAccuracy'][lbl] = integratorTrainAccuracy
+            d[region]['integratorValue'][lbl] = integratorValue
+            d[region]['integratorResp'][lbl] = integratorResp
+            d[region]['integratorRespTime'][lbl] = integratorRespTime
+            d[region]['integratorAccuracy'][lbl] = sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],integratorResp[trainInd[lbl][-1]])
+            if lbl == 'hit':
+                d[region]['shuffledAccuracy'][lbl] = []
+                for _ in range(nShuffles):
+                    resp = np.full(nFlash,np.nan)
+                    for train,test in zip(trainInd[lbl],testInd[lbl]):
+                        shuffleInd = np.random.permutation(len(trainInd))
+                        leak,thresh = fitAccumulator(flashSp[train],y[lbl][shuffleInd],leakRange,thresholdRange)[:2]
+                        resp[test] = runAccumulator(flashSp[test],leak,thresh,recordValues=False)[0]
+                    d[region]['shuffledAccuracy'][lbl].append(sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],resp[trainInd[lbl][-1]]))
     warnings.filterwarnings('default')
 
     h5File = h5py.File(os.path.join(outputDir,'integratorModel','integratorModel_'+str(sessionId)+'.hdf5'),'w')

@@ -112,18 +112,36 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     return hasSpikes & hasPeakResp & (pval<0.05)
 
 
-def trainDecoder(model,X,y,nSplits):
+def getTrainTestSplits(y,nSplits):
     # cross validation using stratified shuffle split
     # each split preserves the percentage of samples of each class
     # all samples used in one test set
-    
+
+    notNan = ~np.isnan(y)
+    classVals = np.unique(y[notNan])
+    nClasses = len(classVals)
+    nSamples = notNan.sum()
+    samplesPerClass = [np.sum(y==val) for val in classVals]
+    if any(n < nSplits for n in samplesPerClass):
+        return None,None
+    samplesPerSplit = [round(n/nSplits) for n in samplesPerClass]
+    shuffleInd = np.random.permutation(np.where(notNan))
+    trainInd = []
+    testInd = []
+    for k in range(nSplits):
+        testInd.append([])
+        for val,n in zip(classVals,samplesPerSplit):
+            start = k*n
+            ind = shuffleInd[y[shuffleInd]==val]
+            testInd[-1].extend(ind[start:start+n] if k+1<nSplits else ind[start:])
+        trainInd.append(np.setdiff1d(shuffleInd,testInd[-1]))
+    return trainInd,testInd
+
+
+def trainDecoder(model,X,y,nSplits):
     classVals = np.unique(y)
     nClasses = len(classVals)
     nSamples = len(y)
-    samplesPerClass = [np.sum(y==val) for val in classVals]
-    samplesPerSplit = [round(n/nSplits) for n in samplesPerClass]
-    shuffleInd = np.random.permutation(nSamples)
-    
     cv = {'estimator': [sklearn.base.clone(model) for _ in range(nSplits)]}
     cv['train_score'] = []
     cv['test_score'] = []
@@ -133,21 +151,15 @@ def trainDecoder(model,X,y,nSplits):
     cv['feature_importance'] = []
     cv['coef'] = []
     modelMethods = dir(model)
-    
-    for k,estimator in enumerate(cv['estimator']):
-        testInd = []
-        for val,n in zip(classVals,samplesPerSplit):
-            start = k*n
-            ind = shuffleInd[y[shuffleInd]==val]
-            testInd.extend(ind[start:start+n] if k+1<nSplits else ind[start:])
-        trainInd = np.setdiff1d(shuffleInd,testInd)
-        estimator.fit(X[trainInd],y[trainInd])
-        cv['train_score'].append(estimator.score(X[trainInd],y[trainInd]))
-        cv['test_score'].append(estimator.score(X[testInd],y[testInd]))
-        cv['predict'][testInd] = estimator.predict(X[testInd])
+    trainInd,testInd = getTrainTestSplits(y,nSplits)
+    for estimator,train,test in zip(cv['estimator'],trainInd,testInd):
+        estimator.fit(X[train],y[train])
+        cv['train_score'].append(estimator.score(X[train],y[train]))
+        cv['test_score'].append(estimator.score(X[test],y[test]))
+        cv['predict'][test] = estimator.predict(X[test])
         for method in ('predict_proba','decision_function'):
             if method in modelMethods:
-                cv[method][testInd] = getattr(estimator,method)(X[testInd])
+                cv[method][test] = getattr(estimator,method)(X[test])
         for attr in ('feature_importance_','coef_'):
             if attr in estimator.__dict__:
                 cv[attr[:-1]].append(getattr(estimator,attr))
@@ -243,4 +255,37 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
         plt.tight_layout()
     
     return clustId,linkageMat
+
+
+def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
+    accuracy = np.zeros((len(leakRange),len(thresholdRange)))
+    for i,leak in enumerate(leakRange):
+        for j,thresh in enumerate(thresholdRange):
+            prediction = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[0]
+            accuracy[i,j] = sklearn.metrics.accuracy_score(y,prediction)
+    i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
+    leakFit = leakRange[i]
+    thresholdFit = thresholdRange[j]
+    return leakFit,thresholdFit,accuracy
+
+
+def runAccumulator(accumulatorInput,leak,threshold,recordValues=True):
+    nTrials = len(accumulatorInput)
+    resp = np.zeros(nTrials)
+    respTime = np.full(nTrials,np.nan)
+    accumulatorValue = []
+    for trial,trialInput in enumerate(accumulatorInput):
+        a = np.zeros(len(trialInput))
+        for t,s in enumerate(trialInput):
+            a[t] += s
+            if t > 0:
+                a[t] += a[t-1] - leak * a[t-1]
+            if not resp[trial] and a[t] > threshold:
+                resp[trial] = 1
+                respTime[trial] = t
+                if not recordValues:
+                    break
+        if recordValues:
+            accumulatorValue.append(a)
+    return resp,respTime,accumulatorValue
 
