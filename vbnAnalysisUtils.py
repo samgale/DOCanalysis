@@ -279,7 +279,7 @@ def runAccumulator(accumulatorInput,leak,threshold,recordValues=True):
         for t,s in enumerate(trialInput):
             a[t] += s
             if t > 0:
-                a[t] += a[t-1] - leak * a[t-1]
+                a[t] += a[t-1] - a[t-1]/leak
             if not resp[trial] and a[t] > threshold:
                 resp[trial] = 1
                 respTime[trial] = t
