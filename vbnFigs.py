@@ -456,28 +456,30 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall weighted',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
+regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
+modelLabels = ('change','hit')
+decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
 t = np.arange(-100,150) 
 
-respMice = {flashes: {lbl: [] for lbl in imageTypeLabels} for flashes in flashLabels}
+respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
 respTimeMice = copy.deepcopy(respMice)
-respMiceRegions = {region: {flashes: {lbl: [] for lbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
+respMiceRegions = {region: {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
 respTimeMiceRegions = copy.deepcopy(respMiceRegions)
-integratorInput = copy.deepcopy(respMiceRegions)
-integrator = copy.deepcopy(respMiceRegions)
-respModel = copy.deepcopy(respMiceRegions)
-respTimeModel = copy.deepcopy(respMiceRegions)
 imageNames = copy.deepcopy(respMiceRegions)
-leak = {region: {lbl: [] for lbl in imageTypeLabels} for region in regions}
+integratorInput = copy.deepcopy(respMiceRegions)
+integratorValue = {region: {flashes: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
+respModel = copy.deepcopy(integratorValue)
+respTimeModel = copy.deepcopy(integratorValue)
+leak = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
 threshold = copy.deepcopy(leak)
-inputNorm = copy.deepcopy(leak)
 novelSession = {region: [] for region in regions}
-modelAccuracy = copy.deepcopy(novelSession)
-trainAccuracy = copy.deepcopy(novelSession)
-decoderAccuracy = {region: {decoder: [] for decoder in ('allUnits','populationAverage')} for region in regions}
+modelAccuracy = {region: {modLbl: [] for modLbl in modelLabels} for region in regions}
+trainAccuracy = copy.deepcopy(modelAccuracy)
+shuffledAccuracy = copy.deepcopy(modelAccuracy)
+decoderAccuracy = {region: {decoder: [] for decoder in decoderLabels} for region in regions}
 
 for i,f in enumerate(filePaths):
     print(i)
@@ -485,18 +487,17 @@ for i,f in enumerate(filePaths):
         if i==0:
             leakRange = d['leakRange'][()]
             thresholdRange = d['thresholdRange'][()]
-        if d['hit'][()].sum() < 10:
-            continue
         novel = d['novel'][()]
         for j,region in enumerate(regions):
             if len(d[region]) > 0:
                 novelSession[region].append(np.any(novel))
-                modelAccuracy[region].append(d[region]['modelAccuracy'][()])
-                trainAccuracy[region].append(d[region]['trainAccuracy'][()])
-                for decoder in ('allUnits','populationAverage'):
+                for mod in modelLabels:
+                    modelAccuracy[region][mod].append(d[region]['integratorAccuracy'][mod][()])
+                    trainAccuracy[region][mod].append(d[region]['integratorTrainAccuracy'][mod][()])
+                for decoder in decoderLabels:
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
-                intgInput = d[region]['input'][()]
-                intg = d[region]['integrator'][()]
+                intgInput = d[region]['integratorInput'][()]
+                intgVal = {mod: d[region]['integratorValue'][mod][()] for mod in modelLabels}
             for k,flashes in enumerate(flashLabels):
                 flashInd = d[flashes][()]
                 if np.any(novel):
@@ -512,23 +513,23 @@ for i,f in enumerate(filePaths):
                     if len(d[region]) > 0:
                         respMiceRegions[region][flashes][lbl].append(d['lick'][ind])
                         respTimeMiceRegions[region][flashes][lbl].append(d['lickLatency'][ind])
-                        integratorInput[region][flashes][lbl].append(intgInput[ind].mean(axis=0))
-                        integrator[region][flashes][lbl].append(intg[ind].mean(axis=0))
-                        respModel[region][flashes][lbl].append(d[region]['modelResp'][ind])
-                        respTimeModel[region][flashes][lbl].append(d[region]['modelRespTime'][ind])
                         imageNames[region][flashes][lbl].append(d['imageName'].asstr()[ind])
-                        if k==0:
-                            leak[region][lbl].append(d[region]['leak'][()])
-                            threshold[region][lbl].append(d[region]['threshold'][()])
-                            inputNorm[region][lbl].append(d[region]['inputNormFactor'][()])
+                        integratorInput[region][flashes][lbl].append(intgInput[ind].mean(axis=0))
+                        for mod in modelLabels:
+                            integratorValue[region][flashes][lbl][mod].append(intgVal[mod][ind].mean(axis=0))
+                            respModel[region][flashes][lbl][mod].append(d[region]['integratorResp'][mod][ind])
+                            respTimeModel[region][flashes][lbl][mod].append(d[region]['integratorRespTime'][mod][ind])
+                            if k==0:
+                                leak[region][lbl][mod].append(d[region]['leak'][mod][()])
+                                threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
 
 
 # plot mean spike rate
-for flashes in flashLabels:
+for flashes in ('change','preChange'): #flashLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        d = np.array(integratorInput[region][flashes][lbl])
+        d = np.array(integratorInput[region][flashes][lbl])*1000
         m = np.nanmean(d,axis=0)
         n = np.sum(~np.isnan(d[:,0]))
         s = np.nanstd(d,axis=0)/(n**0.5)
@@ -538,9 +539,9 @@ for flashes in flashLabels:
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xlim([0,t[-1]])
-    ax.set_ylim([-1,16])
+    # ax.set_ylim([-1,16])
     ax.set_xlabel('Time from flash onset (ms)')
-    ax.set_ylabel('Spikes/s')
+    ax.set_ylabel('Weighted Spikes/s')
     ax.set_title(region+', '+flashes)
     ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
     plt.tight_layout()
@@ -598,12 +599,12 @@ plt.tight_layout()
 
 
 # plot integrator value
-for flashes in flashLabels:
+for flashes in ('change',):# flashLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        d = np.array(integrator[region][flashes][lbl])
-        d /= np.mean(threshold[region][lbl],axis=1)[:,None]
+        d = np.array(integratorValue[region][flashes][lbl]['change'])
+        #d /= np.array(threshold[region][lbl]['change'])[:,-1][:,None]
         m = np.nanmean(d,axis=0)
         n = np.sum(~np.isnan(d[:,0]))
         s = np.nanstd(d,axis=0)/(n**0.5)
@@ -614,7 +615,7 @@ for flashes in flashLabels:
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xlim([0,t[-1]])
     ax.set_yticks([0,1])
-    ax.set_ylim([-0.05,1.3])
+    # ax.set_ylim([-0.05,1.3])
     ax.set_xlabel('Time from change (ms)')
     ax.set_ylabel('Integrator value relative to threshold')
     ax.set_title(region+', '+flashes)
@@ -630,7 +631,7 @@ for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
     for flashes in flashLabels:
-        d = [r.sum()/r.size for r in respModel[region][flashes][lbl]]
+        d = [r.sum()/r.size for r in respModel[region][flashes][lbl]['change']]
         mean.append(np.nanmean(d))
         sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
@@ -655,7 +656,7 @@ for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
     for flashes in flashLabels:
-        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]]
+        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]['change']]
         mean.append(np.nanmean(d))
         sem.append(np.nanstd(d)/(len(d)**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
@@ -680,20 +681,20 @@ fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
           thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
-im = ax.imshow(np.concatenate(trainAccuracy[region]).mean(axis=0).T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+im = ax.imshow(np.array(trainAccuracy[region]['hit'])[:,-1].mean(axis=0).T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
 mean = []
 sem = []
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    lk = np.median(leak[region][lbl],axis=1)
-    thresh = np.median(threshold[region][lbl],axis=1)
+    lk = np.array(leak[region][lbl]['hit'])[:,-1]
+    thresh = np.array(threshold[region][lbl]['hit'])[:,-1]
     ax.plot(lk,thresh,'o',mec=clr,mfc='none',ms=8)
     mx,my = (lk.mean(),thresh.mean())
     sx,sy = (lk.std()/(len(lk)**0.5),thresh.std()/(len(thresh)**0.5))
     ax.plot(mx,my,'o',color=clr,ms=12)
     ax.plot([mx-sx,mx+sx],[my,my],color=clr)
     ax.plot([mx,mx],[my-sy,my+sy],color=clr)
-ax.set_xlabel('leak')
-ax.set_ylabel('threshold')
+ax.set_xlabel('leak time constant (ms)')
+ax.set_ylabel('threshold (spikes/neuron)')
 ax.set_title('average model accuracy')
 cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
 plt.tight_layout()
@@ -701,9 +702,7 @@ plt.tight_layout()
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    thresh = np.mean(threshold[region][lbl],axis=1) 
-    thresh *= np.array(inputNorm[region][lbl])
-    dsort = np.sort(thresh)
+    dsort = np.sort(np.array(threshold[region][lbl]['change'])[:,-1] )
     cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
     ax.plot(dsort,cumProb,color=clr,label=lbl)
 for side in ('right','top'):
@@ -718,7 +717,7 @@ plt.tight_layout()
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    dsort = np.sort(np.mean(leak[region][lbl],axis=1))
+    dsort = np.sort(np.array(leak[region][lbl]['change'])[:,-1])
     cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
     ax.plot(dsort,cumProb,color=clr,label=lbl)
 for side in ('right','top'):
@@ -740,7 +739,7 @@ for sessionType,clr in zip(('familiar','novel'),'gm'):
     sem = []
     for region in regions:
         ind = np.array(novelSession[region]) if sessionType=='novel' else ~np.array(novelSession[region])
-        d = np.array(modelAccuracy[region])[ind]
+        d = np.array(modelAccuracy[region]['change'])[ind]
         mean.append(np.mean(d))
         sem.append(np.std(d)/(len(d)**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=10,label=sessionType)
@@ -756,11 +755,11 @@ ax.set_ylim([0.5,1])
 ax.set_ylabel('Change detection accuracy')
 plt.tight_layout()
 
-for decoder in ('allUnits','populationAverage'):
+for decoder in decoderLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     ax.plot([0,1],[0,1],'k--')
-    ax.plot(decoderAccuracy['VISall'][decoder],modelAccuracy['VISall'],'o',mec='k',mfc='none',alpha=0.25)
+    ax.plot(decoderAccuracy[region][decoder],modelAccuracy[region],'o',mec='k',mfc='none',alpha=0.25)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -787,14 +786,14 @@ plt.tight_layout()
 
 
 # correlation of model and mouse responses and response times
-region = 'VISall weighted'
+region = 'VISall'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
 accuracy = []
 chance = []
 for mouseChange,mouseCatch,modelChange,modelCatch in zip(respMiceRegions[region]['change']['all'],respMiceRegions[region]['catch']['all'],
-                                                         respModel[region]['change']['all'],respModel[region]['catch']['all']):
+                                                         respModel[region]['change']['all']['change'],respModel[region]['catch']['all']['change']):
     mouse = np.concatenate((mouseChange,mouseCatch))
     model = np.concatenate((modelChange,modelCatch))
     accuracy.append(sklearn.metrics.balanced_accuracy_score(mouse,model))
@@ -818,7 +817,7 @@ ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
 accuracy = {lbl: [] for lbl in ('all','familiar','novel')}
 chance = copy.deepcopy(accuracy)
-for mouse,model,novel in zip(respMiceRegions[region]['change']['all'],respModel[region]['change']['all'],novelSession[region]):
+for mouse,model,novel in zip(respMiceRegions[region]['change']['all'],respModel[region]['change']['all']['change'],novelSession[region]):
     accuracy['all'].append(sklearn.metrics.balanced_accuracy_score(mouse,model))
     chance['all'].append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
     lbl = 'novel' if novel else 'familiar'
@@ -832,7 +831,7 @@ for lbl,clr in zip(('all','familiar','novel'),'kgm'):
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlim([0.45,1])
+# ax.set_xlim([0.45,1])
 ax.set_ylim([0,1.01])
 ax.set_xlabel('Similarity of model and mouse (balanced accuracy)')
 ax.set_ylabel('Cumulative fraction of sessions')
@@ -898,15 +897,17 @@ plt.tight_layout()
 
 
 # image response matrix
-region = 'VISall weighted'
+region = 'VISall'
 
 images = {'G': ['im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'],
           'H': ['im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r']}
 
 preImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['preChange']['all'],imageNames[region]['catch']['all'])]
 changeImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['change']['all'],imageNames[region]['catch']['all'])]
-mouseResp,modelResp = [[np.concatenate((change,catch)) for change,catch in zip(r[region]['change']['all'],r[region]['catch']['all'])] for r in (respMiceRegions,respModel)]
-mouseRespTime,modelRespTime = [[np.concatenate((change,catch)) for change,catch in zip(r[region]['change']['all'],r[region]['catch']['all'])] for r in (respTimeMiceRegions,respTimeModel)]
+mouseResp = [np.concatenate((change,catch)) for change,catch in zip(respMiceRegions[region]['change']['all'],respMiceRegions[region]['catch']['all'])]
+modelResp = [np.concatenate((change,catch)) for change,catch in zip(respModel[region]['change']['all']['change'],respModel[region]['catch']['all']['change'])]
+mouseRespTime = [np.concatenate((change,catch)) for change,catch in zip(respTimeMiceRegions[region]['change']['all'],respTimeMiceRegions[region]['catch']['all'])]
+modelRespTime = [np.concatenate((change,catch)) for change,catch in zip(respTimeModel[region]['change']['all']['change'],respTimeModel[region]['catch']['all']['change'])]
 
 respMat = {src: {imgSet: {famNov: [] for famNov in ('familiar','novel')} for imgSet in ('G','H')} for src in ('mouse','model')}
 respTimeMat = copy.deepcopy(respMat)
@@ -959,8 +960,8 @@ for f in filePaths[-1:0:-1]:
     with h5py.File(f,'r') as d:
         novel = d['novel'][()]
         if len(d[region])>0 and np.any(novel) and d['hit'][()].sum()>10:
-            thresh = np.mean(d[region]['threshold'][()])
-            intg = d[region]['integrator'][()]
+            thresh = np.mean(d[region]['threshold']['change'][()])
+            intg = d[region]['integratorValue']['change'][()]
             flashInd = d['change'][()]
             exampleIntegrator = {}
             for ind,lbl in zip(((flashInd & ~novel),(flashInd & novel)),('familiar','novel')):
