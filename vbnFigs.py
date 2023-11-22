@@ -460,7 +460,7 @@ regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VIS
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-modelLabels = ('change','hit')
+modelLabels = ('change','hit','responseTime')
 decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
 t = np.arange(-100,150) 
 
@@ -492,8 +492,11 @@ for i,f in enumerate(filePaths):
             if len(d[region]) > 0:
                 novelSession[region].append(np.any(novel))
                 for mod in modelLabels:
-                    modelAccuracy[region][mod].append(d[region]['integratorAccuracy'][mod][()])
+                    if mod in ('change','hit'):
+                        modelAccuracy[region][mod].append(d[region]['integratorAccuracy'][mod][()])
                     trainAccuracy[region][mod].append(d[region]['integratorTrainAccuracy'][mod][()])
+                    if mod=='hit':
+                        shuffledAccuracy[region][mod].append(d[region]['shuffledAccuracy'][mod][()])
                 for decoder in decoderLabels:
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 intgInput = d[region]['integratorInput'][()]
@@ -677,16 +680,22 @@ plt.tight_layout()
 
 # plot threshold and leak
 region = 'VISall'
+mod = 'responseTime'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
           thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
-im = ax.imshow(np.array(trainAccuracy[region]['hit'])[:,-1].mean(axis=0).T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+if mod=='responseTime':
+    d = np.nanmean(trainAccuracy[region][mod],axis=(0,1)) 
+    d[np.isnan(d)] = np.nanmax(d)
+else:
+    np.array(trainAccuracy[region][mod])[:,-1].mean(axis=0)
+im = ax.imshow(d.T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
 mean = []
 sem = []
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    lk = np.array(leak[region][lbl]['hit'])[:,-1]
-    thresh = np.array(threshold[region][lbl]['hit'])[:,-1]
+    lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,-1]
+    thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,-1]
     ax.plot(lk,thresh,'o',mec=clr,mfc='none',ms=8)
     mx,my = (lk.mean(),thresh.mean())
     sx,sy = (lk.std()/(len(lk)**0.5),thresh.std()/(len(thresh)**0.5))
@@ -702,7 +711,7 @@ plt.tight_layout()
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    dsort = np.sort(np.array(threshold[region][lbl]['change'])[:,-1] )
+    dsort = np.sort(np.array(threshold[region][lbl][mod])[:,-1] )
     cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
     ax.plot(dsort,cumProb,color=clr,label=lbl)
 for side in ('right','top'):
@@ -717,7 +726,7 @@ plt.tight_layout()
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    dsort = np.sort(np.array(leak[region][lbl]['change'])[:,-1])
+    dsort = np.sort(np.array(leak[region][lbl][mod])[:,-1])
     cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
     ax.plot(dsort,cumProb,color=clr,label=lbl)
 for side in ('right','top'):
@@ -787,13 +796,14 @@ plt.tight_layout()
 
 # correlation of model and mouse responses and response times
 region = 'VISall'
+mod = 'responseTime'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
 accuracy = []
 chance = []
 for mouseChange,mouseCatch,modelChange,modelCatch in zip(respMiceRegions[region]['change']['all'],respMiceRegions[region]['catch']['all'],
-                                                         respModel[region]['change']['all']['change'],respModel[region]['catch']['all']['change']):
+                                                         respModel[region]['change']['all'][mod],respModel[region]['catch']['all'][mod]):
     mouse = np.concatenate((mouseChange,mouseCatch))
     model = np.concatenate((modelChange,modelCatch))
     accuracy.append(sklearn.metrics.balanced_accuracy_score(mouse,model))
@@ -817,7 +827,7 @@ ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
 accuracy = {lbl: [] for lbl in ('all','familiar','novel')}
 chance = copy.deepcopy(accuracy)
-for mouse,model,novel in zip(respMiceRegions[region]['change']['all'],respModel[region]['change']['all']['change'],novelSession[region]):
+for mouse,model,novel in zip(respMiceRegions[region]['change']['all'],respModel[region]['change']['all'][mod],novelSession[region]):
     accuracy['all'].append(sklearn.metrics.balanced_accuracy_score(mouse,model))
     chance['all'].append(np.mean([sklearn.metrics.balanced_accuracy_score(mouse,model[np.random.permutation(model.size)]) for _ in range(100)]))
     lbl = 'novel' if novel else 'familiar'
@@ -844,7 +854,7 @@ xticks = np.arange(2)
 corr = []
 chance = []
 for mouseChange,mouseCatch,modelChange,modelCatch in zip(respTimeMiceRegions[region]['change']['all'],respTimeMiceRegions[region]['catch']['all'],
-                                                         respTimeModel[region]['change']['all'],respTimeModel[region]['catch']['all']):
+                                                         respTimeModel[region]['change']['all'][mod],respTimeModel[region]['catch']['all'][mod]):
     mouse = np.concatenate((mouseChange,mouseCatch))
     model = np.concatenate((modelChange,modelCatch))
     ind = ~np.isnan(mouse) & ~np.isnan(model)
@@ -871,7 +881,7 @@ ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
 corr = {lbl: [] for lbl in ('all','familiar','novel')}
 chance = copy.deepcopy(corr)
-for mouse,model,novel in zip(respTimeMiceRegions[region]['change']['all'],respTimeModel[region]['change']['all'],novelSession[region]):
+for mouse,model,novel in zip(respTimeMiceRegions[region]['change']['all'],respTimeModel[region]['change']['all'][mod],novelSession[region]):
     ind = ~np.isnan(mouse) & ~np.isnan(model)
     mouse = mouse[ind]
     model = model[ind]
