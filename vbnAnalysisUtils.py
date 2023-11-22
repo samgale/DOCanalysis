@@ -112,27 +112,31 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     return hasSpikes & hasPeakResp & (pval<0.05)
 
 
-def getTrainTestSplits(y,nSplits):
+def getTrainTestSplits(y,nSplits,hasClasses=True):
     # cross validation using stratified shuffle split
     # each split preserves the percentage of samples of each class
     # all samples used in one test set
 
     notNan = ~np.isnan(y)
-    classVals = np.unique(y[notNan])
-    nClasses = len(classVals)
-    nSamples = notNan.sum()
-    samplesPerClass = [np.sum(y==val) for val in classVals]
-    if any(n < nSplits for n in samplesPerClass):
-        return None,None
+    if hasClasses:
+        classVals = np.unique(y[notNan])
+        nClasses = len(classVals)
+        nSamples = notNan.sum()
+        samplesPerClass = [np.sum(y==val) for val in classVals]
+        if any(n < nSplits for n in samplesPerClass):
+            return None,None
+    else:
+        classVals = [None]
+        samplesPerClass = [notNan.sum()] 
     samplesPerSplit = [round(n/nSplits) for n in samplesPerClass]
-    shuffleInd = np.random.permutation(np.where(notNan))
+    shuffleInd = np.random.permutation(np.where(notNan)[0])
     trainInd = []
     testInd = []
     for k in range(nSplits):
         testInd.append([])
         for val,n in zip(classVals,samplesPerSplit):
             start = k*n
-            ind = shuffleInd[y[shuffleInd]==val]
+            ind = shuffleInd[y[shuffleInd]==val] if hasClasses else shuffleInd
             testInd[-1].extend(ind[start:start+n] if k+1<nSplits else ind[start:])
         trainInd.append(np.setdiff1d(shuffleInd,testInd[-1]))
     return trainInd,testInd
@@ -257,13 +261,20 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
-    accuracy = np.zeros((len(leakRange),len(thresholdRange)))
+def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange,fitRespTime=False):
+    accuracy = np.full((len(leakRange),len(thresholdRange)),np.nan)
     for i,leak in enumerate(leakRange):
         for j,thresh in enumerate(thresholdRange):
-            prediction = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[0]
-            accuracy[i,j] = sklearn.metrics.accuracy_score(y,prediction)
-    i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
+            resp,respTime = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[:2]
+            if fitRespTime:
+                if np.any(resp):
+                    accuracy[i,j] = sum((y-(respTime+(np.median(y)-np.median(respTime))))**2)
+            else:
+                accuracy[i,j] = sklearn.metrics.balanced_accuracy_score(y,resp)
+    if fitRespTime:
+        i,j = np.unravel_index(np.nanargmin(accuracy),accuracy.shape)
+    else:
+        i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
     leakFit = leakRange[i]
     thresholdFit = thresholdRange[j]
     return leakFit,thresholdFit,accuracy
@@ -271,7 +282,7 @@ def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
 
 def runAccumulator(accumulatorInput,leak,threshold,recordValues=True):
     nTrials = len(accumulatorInput)
-    resp = np.zeros(nTrials)
+    resp = np.zeros(nTrials,dtype=bool)
     respTime = np.full(nTrials,np.nan)
     accumulatorValue = []
     for trial,trialInput in enumerate(accumulatorInput):
@@ -281,7 +292,7 @@ def runAccumulator(accumulatorInput,leak,threshold,recordValues=True):
             if t > 0:
                 a[t] += a[t-1] - a[t-1]/leak
             if not resp[trial] and a[t] > threshold:
-                resp[trial] = 1
+                resp[trial] = True
                 respTime[trial] = t
                 if not recordValues:
                     break

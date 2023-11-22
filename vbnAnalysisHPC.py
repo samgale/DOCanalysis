@@ -328,6 +328,7 @@ def fitIntegratorModel(sessionId):
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     preChangeFlashes = np.concatenate((changeFlashes[1:],[False]))
+    lickLatency = lickTimes - flashTimes
     nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
 
@@ -360,7 +361,7 @@ def fitIntegratorModel(sessionId):
     d['prevOmitted'] = prevOmittedFlashes
     d['novel'] = novelFlashes
     d['lick'] = lick
-    d['lickLatency'] = lickTimes - flashTimes
+    d['lickLatency'] = lickLatency
     d['hit'] = hit
     d['miss'] = miss
     d['falseAlarm'] = falseAlarm
@@ -376,6 +377,8 @@ def fitIntegratorModel(sessionId):
         trainInd[lbl],testInd[lbl] = getTrainTestSplits(y[lbl],nCrossVal)
         trainInd[lbl].append(np.where(~np.isnan(y[lbl]))[0])
         testInd[lbl].append(np.where(np.isnan(y[lbl]))[0])
+    y['responseTime'] = lickLatency
+    trainInd['responseTime'],testInd['responseTime'] = getTrainTestSplits(y['responseTime'],nCrossVal,hasClasses=False)
 
     warnings.filterwarnings('ignore')
     for region in regions:
@@ -438,15 +441,16 @@ def fitIntegratorModel(sessionId):
         d[region]['integratorRespTime'] = {}
         d[region]['integratorAccuracy'] = {}
         d[region]['shuffledAccuracy'] = {}
-        for lbl in ('change','hit'):
-            leakFit = np.zeros(nCrossVal+1)
-            thresholdFit = np.zeros(nCrossVal+1)
+        for lbl in ('change','hit','responseTime'):
+            leakFit = np.full(nCrossVal+1,np.nan)
+            thresholdFit = np.full(nCrossVal+1,np.nan)
             integratorTrainAccuracy = np.full((nCrossVal+1,leakRange.size,thresholdRange.size),np.nan)
             integratorValue = np.full((nFlash,tEnd-tStart),np.nan)
             integratorResp = np.full(nFlash,np.nan)
             integratorRespTime = np.full(nFlash,np.nan)
+            fitRespTime = True if lbl=='responseTime' else False
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
-                leakFit[k],thresholdFit[k],integratorTrainAccuracy[k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange)
+                leakFit[k],thresholdFit[k],integratorTrainAccuracy[k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange,fitRespTime)
                 integratorResp[test],integratorRespTime[test],integratorValue[test] = runAccumulator(flashSp[test],leakFit[k],thresholdFit[k])
             d[region]['leak'][lbl] = leakFit
             d[region]['threshold'][lbl] = thresholdFit
@@ -454,7 +458,8 @@ def fitIntegratorModel(sessionId):
             d[region]['integratorValue'][lbl] = integratorValue
             d[region]['integratorResp'][lbl] = integratorResp
             d[region]['integratorRespTime'][lbl] = integratorRespTime
-            d[region]['integratorAccuracy'][lbl] = sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],integratorResp[trainInd[lbl][-1]])
+            if not fitRespTime:
+                d[region]['integratorAccuracy'][lbl] = sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],integratorResp[trainInd[lbl][-1]])
             if lbl == 'hit':
                 d[region]['shuffledAccuracy'][lbl] = []
                 for _ in range(nShuffles):
