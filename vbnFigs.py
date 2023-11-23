@@ -460,9 +460,11 @@ regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VIS
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-modelLabels = ('change','hit','responseTime')
+modelLabels = ('change','hit')
 decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
-t = np.arange(-100,150) 
+tStart = -400
+tEnd = 150
+t = np.arange(tStart,tEnd) 
 
 respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
 respTimeMice = copy.deepcopy(respMice)
@@ -478,6 +480,7 @@ threshold = copy.deepcopy(leak)
 novelSession = {region: [] for region in regions}
 modelAccuracy = {region: {modLbl: [] for modLbl in modelLabels} for region in regions}
 trainAccuracy = copy.deepcopy(modelAccuracy)
+trainRespTime = copy.deepcopy(modelAccuracy)
 shuffledAccuracy = copy.deepcopy(modelAccuracy)
 decoderAccuracy = {region: {decoder: [] for decoder in decoderLabels} for region in regions}
 
@@ -492,11 +495,11 @@ for i,f in enumerate(filePaths):
             if len(d[region]) > 0:
                 novelSession[region].append(np.any(novel))
                 for mod in modelLabels:
-                    if mod in ('change','hit'):
-                        modelAccuracy[region][mod].append(d[region]['integratorAccuracy'][mod][()])
+                    modelAccuracy[region][mod].append(d[region]['integratorAccuracy'][mod][()])
                     trainAccuracy[region][mod].append(d[region]['integratorTrainAccuracy'][mod][()])
+                    trainRespTime[region][mod].append(d[region]['integratorTrainRespTime'][mod][()])
                     if mod=='hit':
-                        shuffledAccuracy[region][mod].append(d[region]['shuffledAccuracy'][mod][()])
+                        shuffledAccuracy[region][mod].append(d[region]['integratorShuffledAccuracy'][mod][()])
                 for decoder in decoderLabels:
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 intgInput = d[region]['integratorInput'][()]
@@ -607,7 +610,7 @@ for flashes in ('change',):# flashLabels:
     ax = fig.add_subplot(1,1,1)
     for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
         d = np.array(integratorValue[region][flashes][lbl]['change'])
-        #d /= np.array(threshold[region][lbl]['change'])[:,-1][:,None]
+        d /= np.array(threshold[region][lbl]['change'])[:,-1][:,None]
         m = np.nanmean(d,axis=0)
         n = np.sum(~np.isnan(d[:,0]))
         s = np.nanstd(d,axis=0)/(n**0.5)
@@ -616,7 +619,7 @@ for flashes in ('change',):# flashLabels:
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xlim([0,t[-1]])
+    # ax.set_xlim([0,t[-1]])
     ax.set_yticks([0,1])
     # ax.set_ylim([-0.05,1.3])
     ax.set_xlabel('Time from change (ms)')
@@ -678,21 +681,102 @@ ax.legend()
 plt.tight_layout()
 
 
+# decision time vs leak and threshold
+region = 'VISall'
+mod = 'change'
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
+          thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
+d = np.array(trainRespTime[region][mod])[:,-1].mean(axis=0).T + tStart
+im = ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+for rt in np.arange(0,120,10):
+    i,j = np.where(d < rt)
+    x = np.unique(j)
+    y = [np.max(i[j==k]) for k in x]
+    ax.plot(x+0.5,thresholdRange[y],'r')
+for lbl,clr in zip(('familiar','novel'),'gm'):
+    lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,-1]
+    thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,-1]
+    ax.plot(lk,thresh,'o',mec=clr,mfc='none',ms=8)
+    mx,my = (lk.mean(),thresh.mean())
+    sx,sy = (lk.std()/(len(lk)**0.5),thresh.std()/(len(thresh)**0.5))
+    ax.plot(mx,my,'o',color=clr,ms=12)
+    ax.plot([mx-sx,mx+sx],[my,my],color=clr)
+    ax.plot([mx,mx],[my-sy,my+sy],color=clr)
+ax.set_xlabel('leak time constant (ms)')
+ax.set_ylabel('threshold (spikes/neuron)')
+ax.set_title('average decision time (ms)')
+cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+plt.tight_layout()
+
+
+# accuracy vs leak and threshold
+extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
+          thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
+
+fig = plt.figure(figsize=(10,10))
+gs = matplotlib.gridspec.GridSpec(11,10)
+i = 0
+j = 0
+for d in trainAccuracy[region]['change']:
+    ax = fig.add_subplot(gs[i,j])
+    d = d[-1].T
+    ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+    c = np.zeros(d.shape+(4,))
+    ind = np.where(d==d.max())
+    c[:,:,0][ind] = 1
+    c[:,:,-1][ind] = 1
+    ax.imshow(c,interpolation='none',extent=extent,aspect='auto',origin='lower')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if j == 9:
+        i += 1
+        j = 0
+    else:
+        j += 1
+plt.tight_layout()
+
+fig = plt.figure(figsize=(10,10))
+gs = matplotlib.gridspec.GridSpec(11,10)
+row = 0
+col = 0
+for d in trainRespTime[region]['change']:
+    ax = fig.add_subplot(gs[row,col])
+    d = d[-1].T + tStart
+    ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+    for rt in [100]:
+        i,j = np.where(d < rt)
+        x = np.unique(j)
+        y = [np.max(i[j==k]) for k in x]
+        ax.plot(x+0.5,thresholdRange[y],'r')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if col == 9:
+        row += 1
+        col = 0
+    else:
+        col += 1
+plt.tight_layout()
+
+
 # plot threshold and leak
 region = 'VISall'
-mod = 'responseTime'
+mod = 'change'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
           thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
 if mod=='responseTime':
-    d = np.nanmean(trainAccuracy[region][mod],axis=(0,1)) 
-    d[np.isnan(d)] = np.nanmax(d)
+    d = []
+    for a in np.array(trainAccuracy[region][mod]):
+        b = np.nanmean(a,axis=0)
+        b[np.isnan(b)] = np.nanmax(b)
+        d.append(b)
+    d = np.nanmean(d,axis=0)
 else:
-    np.array(trainAccuracy[region][mod])[:,-1].mean(axis=0)
+    d = np.array(trainAccuracy[region][mod])[:,-1].mean(axis=0)
 im = ax.imshow(d.T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
-mean = []
-sem = []
 for lbl,clr in zip(('familiar','novel'),'gm'):
     lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,-1]
     thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,-1]
@@ -740,6 +824,7 @@ plt.tight_layout()
 
 
 # model accuracy
+mod = 'hit'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(len(regions))
@@ -748,7 +833,7 @@ for sessionType,clr in zip(('familiar','novel'),'gm'):
     sem = []
     for region in regions:
         ind = np.array(novelSession[region]) if sessionType=='novel' else ~np.array(novelSession[region])
-        d = np.array(modelAccuracy[region]['change'])[ind]
+        d = np.array(modelAccuracy[region][mod])[ind]
         mean.append(np.mean(d))
         sem.append(np.std(d)/(len(d)**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=10,label=sessionType)
@@ -796,7 +881,7 @@ plt.tight_layout()
 
 # correlation of model and mouse responses and response times
 region = 'VISall'
-mod = 'responseTime'
+mod = 'change'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(2)
