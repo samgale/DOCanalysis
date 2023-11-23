@@ -317,10 +317,10 @@ def fitIntegratorModel(sessionId):
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
-    tStart = -100
+    tStart = -400
     tEnd = 150
-    leakRange= np.arange(1,101)
-    thresholdRange = np.arange(0.01,1.01,0.01)
+    leakRange= np.arange(1,150)
+    thresholdRange = np.arange(0.01,1.1,0.01)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
@@ -377,8 +377,6 @@ def fitIntegratorModel(sessionId):
         trainInd[lbl],testInd[lbl] = getTrainTestSplits(y[lbl],nCrossVal)
         trainInd[lbl].append(np.where(~np.isnan(y[lbl]))[0])
         testInd[lbl].append(np.where(np.isnan(y[lbl]))[0])
-    y['responseTime'] = lickLatency
-    trainInd['responseTime'],testInd['responseTime'] = getTrainTestSplits(y['responseTime'],nCrossVal,hasClasses=False)
 
     warnings.filterwarnings('ignore')
     for region in regions:
@@ -436,39 +434,40 @@ def fitIntegratorModel(sessionId):
         d[region]['leak'] = {}
         d[region]['threshold'] = {}
         d[region]['integratorTrainAccuracy'] = {}
+        d[region]['integratorTrainRespTime'] = {}
         d[region]['integratorValue'] = {}
         d[region]['integratorResp'] = {}
         d[region]['integratorRespTime'] = {}
         d[region]['integratorAccuracy'] = {}
-        d[region]['shuffledAccuracy'] = {}
-        for lbl in ('change','hit','responseTime'):
+        d[region]['integratorShuffledAccuracy'] = {}
+        for lbl in ('change','hit'):
             leakFit = np.full(nCrossVal+1,np.nan)
             thresholdFit = np.full(nCrossVal+1,np.nan)
-            integratorTrainAccuracy = np.full((nCrossVal+1,leakRange.size,thresholdRange.size),np.nan)
+            integratorTrainAccuracy = np.full((nCrossVal+1,thresholdRange.size,leakRange.size),np.nan)
+            integratorTrainRespTime = integratorTrainAccuracy.copy()
             integratorValue = np.full((nFlash,tEnd-tStart),np.nan)
             integratorResp = np.full(nFlash,np.nan)
             integratorRespTime = np.full(nFlash,np.nan)
-            fitRespTime = True if lbl=='responseTime' else False
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
-                leakFit[k],thresholdFit[k],integratorTrainAccuracy[k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange,fitRespTime)
+                leakFit[k],thresholdFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange)
                 integratorResp[test],integratorRespTime[test],integratorValue[test] = runAccumulator(flashSp[test],leakFit[k],thresholdFit[k])
             d[region]['leak'][lbl] = leakFit
             d[region]['threshold'][lbl] = thresholdFit
             d[region]['integratorTrainAccuracy'][lbl] = integratorTrainAccuracy
+            d[region]['integratorTrainRespTime'][lbl] = integratorTrainRespTime
             d[region]['integratorValue'][lbl] = integratorValue
             d[region]['integratorResp'][lbl] = integratorResp
             d[region]['integratorRespTime'][lbl] = integratorRespTime
-            if not fitRespTime:
-                d[region]['integratorAccuracy'][lbl] = sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],integratorResp[trainInd[lbl][-1]])
+            d[region]['integratorAccuracy'][lbl] = sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],integratorResp[trainInd[lbl][-1]])
             if lbl == 'hit':
-                d[region]['shuffledAccuracy'][lbl] = []
+                d[region]['integratorShuffledAccuracy'][lbl] = []
                 for _ in range(nShuffles):
                     resp = np.full(nFlash,np.nan)
                     for train,test in zip(trainInd[lbl][:-1],testInd[lbl][:-1]):
                         shuffleInd = np.random.permutation(train)
                         leak,thresh = fitAccumulator(flashSp[train],y[lbl][shuffleInd],leakRange,thresholdRange)[:2]
                         resp[test] = runAccumulator(flashSp[test],leak,thresh,recordValues=False)[0]
-                    d[region]['shuffledAccuracy'][lbl].append(sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],resp[trainInd[lbl][-1]]))
+                    d[region]['integratorShuffledAccuracy'][lbl].append(sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],resp[trainInd[lbl][-1]]))
     warnings.filterwarnings('default')
 
     h5File = h5py.File(os.path.join(outputDir,'integratorModel','integratorModel_'+str(sessionId)+'.hdf5'),'w')

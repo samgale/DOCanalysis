@@ -261,23 +261,21 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange,fitRespTime=False):
-    accuracy = np.full((len(leakRange),len(thresholdRange)),np.nan)
-    for i,leak in enumerate(leakRange):
-        for j,thresh in enumerate(thresholdRange):
-            resp,respTime = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[:2]
-            if fitRespTime:
-                if np.any(resp):
-                    accuracy[i,j] = sum((y-(respTime+(np.median(y)-np.median(respTime))))**2)
-            else:
-                accuracy[i,j] = sklearn.metrics.balanced_accuracy_score(y,resp)
-    if fitRespTime:
-        i,j = np.unravel_index(np.nanargmin(accuracy),accuracy.shape)
-    else:
-        i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
-    leakFit = leakRange[i]
-    thresholdFit = thresholdRange[j]
-    return leakFit,thresholdFit,accuracy
+def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
+    accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
+    respTime = accuracy.copy()
+    for i,thresh in enumerate(thresholdRange):
+        for j,leak in enumerate(leakRange):
+            resp,rt = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[:2]
+            accuracy[i,j] = sklearn.metrics.balanced_accuracy_score(y,resp)
+            respTime[i,j] = np.nanmean(rt)
+    #i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
+    i,j = np.where(accuracy==accuracy.max())
+    k = np.stack((i,j))
+    k = np.argmin(np.sum(np.absolute(k - np.mean(k,axis=1)[:,None]),axis=0))
+    leakFit = leakRange[j[k]]
+    thresholdFit = thresholdRange[i[k]]
+    return leakFit,thresholdFit,accuracy,respTime
 
 
 def runAccumulator(accumulatorInput,leak,threshold,recordValues=True):
