@@ -317,10 +317,10 @@ def fitIntegratorModel(sessionId):
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
-    tStart = -400
+    tStart = -300
     tEnd = 150
-    leakRange= np.arange(1,150)
-    thresholdRange = np.arange(0.01,1.1,0.01)
+    leakRange= 1/np.arange(0.01,0.21,0.01)
+    thresholdRange = np.arange(0.01,1.01,0.01)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
