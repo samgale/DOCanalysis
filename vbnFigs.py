@@ -456,15 +456,12 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
+regions = ('VISall weighted',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
 modelLabels = ('change','hit')
 decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
-tStart = -400
-tEnd = 150
-t = np.arange(tStart,tEnd) 
 
 respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
 respTimeMice = copy.deepcopy(respMice)
@@ -483,11 +480,13 @@ trainAccuracy = copy.deepcopy(modelAccuracy)
 trainRespTime = copy.deepcopy(modelAccuracy)
 shuffledAccuracy = copy.deepcopy(modelAccuracy)
 decoderAccuracy = {region: {decoder: [] for decoder in decoderLabels} for region in regions}
-
 for i,f in enumerate(filePaths):
     print(i)
     with h5py.File(f,'r') as d:
         if i==0:
+            tEnd = d['tEnd'][()]
+            binSize = 5
+            t = np.arange(0,tEnd,binSize)
             leakRange = d['leakRange'][()]
             thresholdRange = d['thresholdRange'][()]
         novel = d['novel'][()]
@@ -530,7 +529,7 @@ for i,f in enumerate(filePaths):
                                 threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
 
 
-# plot mean spike rate
+# plot mean input spike rate
 for flashes in ('change','preChange'): #flashLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
@@ -544,7 +543,7 @@ for flashes in ('change','preChange'): #flashLabels:
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xlim([0,t[-1]])
+    # ax.set_xlim([tStart,tEnd])
     # ax.set_ylim([-1,16])
     ax.set_xlabel('Time from flash onset (ms)')
     ax.set_ylabel('Weighted Spikes/s')
@@ -621,7 +620,7 @@ for flashes in ('change',):# flashLabels:
     ax.tick_params(direction='out',top=False,right=False)
     # ax.set_xlim([0,t[-1]])
     ax.set_yticks([0,1])
-    # ax.set_ylim([-0.05,1.3])
+    ax.set_ylim([-0.05,1.5])
     ax.set_xlabel('Time from change (ms)')
     ax.set_ylabel('Integrator value relative to threshold')
     ax.set_title(region+', '+flashes)
@@ -681,6 +680,24 @@ ax.legend()
 plt.tight_layout()
 
 
+#
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for rt, acc in zip(trainRespTime[region][mod],trainAccuracy[region][mod]):
+    
+    r = rt[-1].flatten()
+    a = acc[-1].flatten()
+    ind = a>np.percentile(a,90)
+    dsort = np.sort(r[ind])
+    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+    ax.plot(dsort,cumProb,'k',alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,150])
+ax.set_ylim([0,1.01])
+plt.tight_layout()
+
 # decision time vs leak and threshold
 region = 'VISall'
 mod = 'change'
@@ -688,13 +705,13 @@ fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
           thresholdRange[0]-0.5*thresholdRange[0], thresholdRange[-1] + 0.5*thresholdRange[0]]
-d = np.array(trainRespTime[region][mod])[:,-1].mean(axis=0).T + tStart
+d = np.array(trainRespTime[region][mod])[:,-1].mean(axis=0)
 im = ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
-for rt in np.arange(0,120,10):
+for rt in np.arange(0,110,10):
     i,j = np.where(d < rt)
     x = np.unique(j)
     y = [np.max(i[j==k]) for k in x]
-    ax.plot(x+0.5,thresholdRange[y],'r')
+    ax.plot(leakRange[x]+0.5,thresholdRange[y],'r')
 for lbl,clr in zip(('familiar','novel'),'gm'):
     lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,-1]
     thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,-1]
@@ -719,15 +736,16 @@ fig = plt.figure(figsize=(10,10))
 gs = matplotlib.gridspec.GridSpec(11,10)
 i = 0
 j = 0
-for d in trainAccuracy[region]['change']:
+for acc,lk,thr in zip(trainAccuracy[region]['change'],leak[region]['all'][mod],threshold[region]['all'][mod]):
     ax = fig.add_subplot(gs[i,j])
-    d = d[-1].T
-    ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
-    c = np.zeros(d.shape+(4,))
-    ind = np.where(d==d.max())
+    a = acc[-1]
+    ax.imshow(a,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+    c = np.zeros(a.shape+(4,))
+    ind = np.where(a>np.percentile(a,99))#np.where(a==a.max())
     c[:,:,0][ind] = 1
     c[:,:,-1][ind] = 1
     ax.imshow(c,interpolation='none',extent=extent,aspect='auto',origin='lower')
+    ax.plot(lk[-1],thr[-1],'o',mec='r',mfc='none')
     ax.set_xticks([])
     ax.set_yticks([])
     if j == 9:
@@ -743,7 +761,7 @@ row = 0
 col = 0
 for d in trainRespTime[region]['change']:
     ax = fig.add_subplot(gs[row,col])
-    d = d[-1].T + tStart
+    d = d[-1]
     ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
     for rt in [100]:
         i,j = np.where(d < rt)
@@ -776,7 +794,7 @@ if mod=='responseTime':
     d = np.nanmean(d,axis=0)
 else:
     d = np.array(trainAccuracy[region][mod])[:,-1].mean(axis=0)
-im = ax.imshow(d.T,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
+im = ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
 for lbl,clr in zip(('familiar','novel'),'gm'):
     lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,-1]
     thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,-1]
@@ -824,7 +842,7 @@ plt.tight_layout()
 
 
 # model accuracy
-mod = 'hit'
+mod = 'change'
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 xticks = np.arange(len(regions))
@@ -853,7 +871,7 @@ for decoder in decoderLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     ax.plot([0,1],[0,1],'k--')
-    ax.plot(decoderAccuracy[region][decoder],modelAccuracy[region],'o',mec='k',mfc='none',alpha=0.25)
+    ax.plot(decoderAccuracy[region][decoder],modelAccuracy[region][mod],'o',mec='k',mfc='none',alpha=0.25)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -1080,6 +1098,6 @@ for f in filePaths[-1:0:-1]:
             plt.tight_layout()
             
             i += 1
-            if i>=20:
+            if i>=10:
                 break
 
