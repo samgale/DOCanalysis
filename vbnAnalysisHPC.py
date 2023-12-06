@@ -317,10 +317,11 @@ def fitIntegratorModel(sessionId):
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
-    tStart = -300
     tEnd = 150
-    leakRange= 1/np.arange(0.01,0.21,0.01)
-    thresholdRange = np.arange(0.01,1.01,0.01)
+    binSize = 5
+    nBins = int(tEnd/binSize)
+    leakRange = np.arange(5,100,5)/binSize
+    thresholdRange = np.arange(0.5,10,0.5)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
@@ -348,8 +349,8 @@ def fitIntegratorModel(sessionId):
     d = {region: {} for region in regions}
     d['sessionId'] = sessionId
     d['regions'] = regions
-    d['tStart'] = tStart
     d['tEnd'] = tEnd
+    d['binSize'] = binSize
     d['leakRange'] = leakRange
     d['thresholdRange'] = thresholdRange
     d['imageName'] = np.array(stim['image_name'])
@@ -374,7 +375,22 @@ def fitIntegratorModel(sessionId):
         y[lbl] = np.full(nFlash,np.nan)
         y[lbl][go] = 1
         y[lbl][nogo] = 0
-        trainInd[lbl],testInd[lbl] = getTrainTestSplits(y[lbl],nCrossVal)
+        if lbl=='change' and np.any(novelFlashes):
+            # balance novel and familiar changes
+            train = []
+            test = []
+            for i in (novelFlashes,~novelFlashes):
+                j = np.where(changeFlashes & i)[0]
+                j = np.concatenate((j,j-1))
+                k = y[lbl].copy()
+                k[j] = np.nan
+                tr,ts = getTrainTestSplits(k,nCrossVal)
+                train.append(tr)
+                test.append(ts)
+            trainInd[lbl] = [list(i)+list(j) for i,j in zip(*train)]
+            testInd[lbl] = [list(i)+list(j) for i,j in zip(*test)]
+        else:
+            trainInd[lbl],testInd[lbl] = getTrainTestSplits(y[lbl],nCrossVal)
         trainInd[lbl].append(np.where(~np.isnan(y[lbl]))[0])
         testInd[lbl].append(np.where(np.isnan(y[lbl]))[0])
 
@@ -386,7 +402,7 @@ def fitIntegratorModel(sessionId):
         
         sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
         for i,u in enumerate(np.where(inRegion)[0]):
-            sp[i]=spikes[u,:,:]
+            sp[i] = spikes[u,:,:]
             
         changeSp = sp[:,changeFlashes,:]
         preChangeSp = sp[:,preChangeFlashes,:]
@@ -395,13 +411,19 @@ def fitIntegratorModel(sessionId):
         if nUnits < minUnits:
             continue
         d[region]['nUnits'] = nUnits
+
+        sp = sp[hasResp]
+        baseline = sp[:,:,-tEnd:].mean(axis=-1)
+        baseline = np.concatenate((baseline[:,0][:,None],baseline[:,:-1]),axis=1)
+        sp = sp[:,:,:tEnd] - baseline[:,:,None]
+        sp = sp.reshape((nUnits,nFlash,nBins,binSize)).sum(axis=-1)
         
         d[region]['decoderTrainAccuracy'] = {}
         d[region]['decoderWeights'] = {}
         d[region]['decoderAccuracy'] = {}
         d[region]['decoderPrediction'] = {}
         d[region]['decoderConfidence'] = {}
-        for X,lbl in zip((sp[hasResp,:,:tEnd].mean(axis=0),sp[hasResp,:,:tEnd].sum(axis=-1).T,sp[hasResp,:,:tEnd].transpose(1,0,2).reshape((nFlash,-1))),
+        for X,lbl in zip((sp.mean(axis=0),sp.sum(axis=-1).T,sp.transpose(1,0,2).reshape((nFlash,-1))),
                          ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')):              
             decoderTrainAccuracy = np.zeros(nCrossVal+1)
             decoderWeights = np.zeros((nCrossVal+1,X.shape[1]))
@@ -425,10 +447,12 @@ def fitIntegratorModel(sessionId):
 
         if 'weighted' in region:
             w = d[region]['decoderWeights']['allUnitSpikeCount'].mean(axis=0)
-            flashSp = np.mean(sp[hasResp]*w[:,None,None],axis=0)
+            w[w<0] = np.nan
+            sp *= w[:,None,None]
+            flashSp = np.nanmean(sp,axis=0)
         else:
-            flashSp = sp[hasResp].mean(axis=0)
-        flashSp = np.concatenate((np.concatenate((flashSp[0,tStart:][None,:],flashSp[:-1,tStart:]),axis=0),flashSp[:,:tEnd]),axis=1)
+            flashSp = sp.mean(axis=0)
+        flashSp /= flashSp.max()
         d[region]['integratorInput'] = flashSp
 
         d[region]['leak'] = {}
@@ -442,12 +466,12 @@ def fitIntegratorModel(sessionId):
         d[region]['integratorShuffledAccuracy'] = {}
         for lbl in ('change','hit'):
             leakFit = np.full(nCrossVal+1,np.nan)
-            thresholdFit = np.full(nCrossVal+1,np.nan)
+            thresholdFit = leakFit.copy()
             integratorTrainAccuracy = np.full((nCrossVal+1,thresholdRange.size,leakRange.size),np.nan)
             integratorTrainRespTime = integratorTrainAccuracy.copy()
-            integratorValue = np.full((nFlash,tEnd-tStart),np.nan)
+            integratorValue = np.full((nFlash,nBins),np.nan)
             integratorResp = np.full(nFlash,np.nan)
-            integratorRespTime = np.full(nFlash,np.nan)
+            integratorRespTime = integratorResp.copy()
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
                 leakFit[k],thresholdFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange)
                 integratorResp[test],integratorRespTime[test],integratorValue[test] = runAccumulator(flashSp[test],leakFit[k],thresholdFit[k])
