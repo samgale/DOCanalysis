@@ -269,12 +269,14 @@ def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
             resp,rt = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[:2]
             accuracy[i,j] = sklearn.metrics.balanced_accuracy_score(y,resp)
             respTime[i,j] = np.nanmean(rt)
-    #i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
+    # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
+    # leakFit = leakRange[j]
+    # thresholdFit = thresholdRange[i]
     i,j = np.where(accuracy==accuracy.max())
-    k = np.stack((i,j))
-    k = np.argmin(np.sum(np.absolute(k - np.mean(k,axis=1)[:,None]),axis=0))
-    leakFit = leakRange[j[k]]
-    thresholdFit = thresholdRange[i[k]]
+    s = np.stack((i,j))
+    s = np.argmin(np.sum((s - np.mean(s,axis=1)[:,None])**2,axis=0)**0.5)
+    leakFit = leakRange[j[s]]
+    thresholdFit = thresholdRange[i[s]]
     return leakFit,thresholdFit,accuracy,respTime
 
 
