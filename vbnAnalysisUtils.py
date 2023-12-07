@@ -7,6 +7,7 @@ Created on Fri Sep 29 14:39:37 2023
 
 import os
 import math
+import random
 import numpy as np
 import scipy.stats
 import scipy.cluster
@@ -66,7 +67,7 @@ def getBehavData(stim):
     return flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes
 
 
-def getUnitsInRegion(units,region,rs=False,fs=False):
+def getUnitsInRegion(units,region,layer=None,rs=False,fs=False):
     if region in ('SC/MRN cluster 1','SC/MRN cluster 2'):
         clust = 1 if '1' in region else 2
         dirPath = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis'
@@ -75,8 +76,6 @@ def getUnitsInRegion(units,region,rs=False,fs=False):
         u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
         inRegion = np.in1d(units.index,u)
     else:
-        if 'weighted' in region:
-            region = region[:region.find(' weighted')]
         if region=='VISall':
             reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
         elif region=='SC':
@@ -89,11 +88,14 @@ def getUnitsInRegion(units,region,rs=False,fs=False):
             reg = region
         inRegion = np.in1d(units['structure_acronym'],reg)
         if 'VIS' in region:
-            rsUnits = np.array(units['waveform_duration'] > 0.4)
-            if rs and not fs:
-                inRegion = inRegion & rsUnits
-            elif fs and not rs:
-                inRegion = inRegion & ~rsUnits
+            if layer is not None:
+                inRegion = inRegion & np.in1d(units['cortical_layer'],layer)
+            if rs or fs:
+                rsUnits = np.array(units['waveform_duration'] > 0.4)
+                if rs and not fs:
+                    inRegion = inRegion & rsUnits
+                elif fs and not rs:
+                    inRegion = inRegion & ~rsUnits
     return inRegion
     
 
@@ -261,12 +263,12 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
+def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange,sigma=0):
     accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
     respTime = accuracy.copy()
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
-            resp,rt = runAccumulator(accumulatorInput,leak,thresh,recordValues=False)[:2]
+            resp,rt = runAccumulator(accumulatorInput,leak,thresh,sigma)[:2]
             accuracy[i,j] = sklearn.metrics.balanced_accuracy_score(y,resp)
             respTime[i,j] = np.nanmean(rt)
     # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
@@ -280,23 +282,24 @@ def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange):
     return leakFit,thresholdFit,accuracy,respTime
 
 
-def runAccumulator(accumulatorInput,leak,threshold,recordValues=True):
+def runAccumulator(accumulatorInput,leak,threshold,sigma=0,recordValues=False):
     nTrials = len(accumulatorInput)
     resp = np.zeros(nTrials,dtype=bool)
     respTime = np.full(nTrials,np.nan)
     accumulatorValue = []
     for trial,trialInput in enumerate(accumulatorInput):
-        a = np.zeros(len(trialInput))
+        av = []
+        a = 0
         for t,s in enumerate(trialInput):
-            a[t] += s
-            if t > 0:
-                a[t] += a[t-1] - a[t-1]/leak
-            if not resp[trial] and a[t] > threshold:
+            a += s + random.gauss(0,sigma) - a/leak
+            if recordValues:
+                av.append(a)
+            if not resp[trial] and a > threshold:
                 resp[trial] = True
                 respTime[trial] = t
                 if not recordValues:
                     break
         if recordValues:
-            accumulatorValue.append(a)
+            accumulatorValue.append(av)
     return resp,respTime,accumulatorValue
 
