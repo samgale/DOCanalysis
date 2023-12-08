@@ -456,11 +456,11 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall weighted',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
+regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-modelLabels = ('change','hit')
+modelLabels = ('change',)
 decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
 
 respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
@@ -475,10 +475,9 @@ respTimeModel = copy.deepcopy(integratorValue)
 leak = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
 threshold = copy.deepcopy(leak)
 novelSession = {region: [] for region in regions}
-modelAccuracy = {region: {modLbl: [] for modLbl in modelLabels} for region in regions}
-trainAccuracy = copy.deepcopy(modelAccuracy)
-trainRespTime = copy.deepcopy(modelAccuracy)
-shuffledAccuracy = copy.deepcopy(modelAccuracy)
+trainAccuracy = {region: {modLbl: [] for modLbl in modelLabels} for region in regions}
+trainRespTime = copy.deepcopy(trainAccuracy)
+shuffledAccuracy = copy.deepcopy(trainAccuracy)
 decoderAccuracy = {region: {decoder: [] for decoder in decoderLabels} for region in regions}
 for i,f in enumerate(filePaths):
     print(i)
@@ -494,7 +493,6 @@ for i,f in enumerate(filePaths):
             if len(d[region]) > 0:
                 novelSession[region].append(np.any(novel))
                 for mod in modelLabels:
-                    modelAccuracy[region][mod].append(d[region]['integratorAccuracy'][mod][()])
                     trainAccuracy[region][mod].append(d[region]['integratorTrainAccuracy'][mod][()])
                     trainRespTime[region][mod].append(d[region]['integratorTrainRespTime'][mod][()])
                     if mod=='hit':
@@ -502,7 +500,9 @@ for i,f in enumerate(filePaths):
                 for decoder in decoderLabels:
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 intgInput = d[region]['integratorInput'][()]
-                intgVal = {mod: d[region]['integratorValue'][mod][()] for mod in modelLabels}
+                # intgVal = {mod: d[region]['integratorValue'][mod][()] for mod in modelLabels}
+                intgResp = {mod: d[region]['integratorResp'][mod][()] for mod in modelLabels}
+                intgRt = {mod: d[region]['integratorRespTime'][mod][()] for mod in modelLabels}
             for k,flashes in enumerate(flashLabels):
                 flashInd = d[flashes][()]
                 if np.any(novel):
@@ -521,9 +521,9 @@ for i,f in enumerate(filePaths):
                         imageNames[region][flashes][lbl].append(d['imageName'].asstr()[ind])
                         integratorInput[region][flashes][lbl].append(intgInput[ind].mean(axis=0))
                         for mod in modelLabels:
-                            integratorValue[region][flashes][lbl][mod].append(intgVal[mod][ind].mean(axis=0))
-                            respModel[region][flashes][lbl][mod].append(d[region]['integratorResp'][mod][ind])
-                            respTimeModel[region][flashes][lbl][mod].append(d[region]['integratorRespTime'][mod][ind])
+                            # integratorValue[region][flashes][lbl][mod].append(intgVal[mod][:,ind].mean(axis=1))
+                            respModel[region][flashes][lbl][mod].append(intgResp[mod][:,ind])
+                            respTimeModel[region][flashes][lbl][mod].append(intgRt[mod][:,ind])
                             if k==0:
                                 leak[region][lbl][mod].append(d[region]['leak'][mod][()])
                                 threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
@@ -534,7 +534,7 @@ for flashes in ('change','preChange'): #flashLabels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        d = np.array(integratorInput[region][flashes][lbl])*1000
+        d = np.array(integratorInput[region][flashes][lbl])
         m = np.nanmean(d,axis=0)
         n = np.sum(~np.isnan(d[:,0]))
         s = np.nanstd(d,axis=0)/(n**0.5)
@@ -550,57 +550,6 @@ for flashes in ('change','preChange'): #flashLabels:
     ax.set_title(region+', '+flashes)
     ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
     plt.tight_layout()
-
-
-# plot mouse response rate and latency
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-xticks = np.arange(len(flashLabels))
-for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-    mean = []
-    sem = []
-    for flashes in flashLabels:
-        d = [r.sum()/r.size for r in respMice[flashes][lbl]]
-        mean.append(np.nanmean(d))
-        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
-    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
-    for x,m,s in zip(xticks,mean,sem):
-        ax.plot([x,x],[m-s,m+s],color=clr)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks(xticks)
-ax.set_xticklabels(flashLabels)
-ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-ax.set_ylim([0,1])
-ax.set_ylabel('Response rate')
-ax.set_title('Mice')
-ax.legend(loc='upper right')
-plt.tight_layout()
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-    mean = []
-    sem = []
-    for flashes in flashLabels:
-        d = [np.nanmean(r)*1000 for r in respTimeMice[flashes][lbl]]
-        mean.append(np.nanmean(d))
-        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
-    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
-    for x,m,s in zip(xticks,mean,sem):
-        ax.plot([x,x],[m-s,m+s],color=clr)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xticks(xticks)
-ax.set_xticklabels(flashLabels)
-ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-# ax.set_ylim([350,500])
-ax.set_ylabel('Response time (ms)')
-ax.set_title('Mice')
-ax.legend()
-plt.tight_layout()
 
 
 # plot integrator value
@@ -628,56 +577,112 @@ for flashes in ('change',):# flashLabels:
     plt.tight_layout()
 
 
-# plot model response rate and decision time
+# plot mouse response rate and latency
+lbls = ('change','catch','nonChange','prevOmitted')
+
 fig = plt.figure()
-xticks = np.arange(len(flashLabels))
 ax = fig.add_subplot(1,1,1)
+xticks = np.arange(len(lbls))
 for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
-    for flashes in flashLabels:
-        d = [r.sum()/r.size for r in respModel[region][flashes][lbl]['change']]
+    for flashes in lbls:
+        d = [r.sum()/r.size for r in respMice[flashes][lbl]]
         mean.append(np.nanmean(d))
         sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
-    ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
     for x,m,s in zip(xticks,mean,sem):
         ax.plot([x,x],[m-s,m+s],color=clr)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(xticks)
-ax.set_xticklabels(flashLabels)
+ax.set_xticklabels(lbls)
 ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
 ax.set_ylim([0,1])
 ax.set_ylabel('Response rate')
-ax.set_title('Model')
-ax.legend()
+ax.set_title('Mice')
+ax.legend(loc='upper right')
 plt.tight_layout()
 
 fig = plt.figure()
-xticks = np.arange(len(flashLabels))
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
-    for flashes in flashLabels:
-        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]['change']]
+    for flashes in lbls:
+        d = [np.nanmean(r)*1000 for r in respTimeMice[flashes][lbl]]
         mean.append(np.nanmean(d))
-        sem.append(np.nanstd(d)/(len(d)**0.5))
-    ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
     for x,m,s in zip(xticks,mean,sem):
         ax.plot([x,x],[m-s,m+s],color=clr)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(xticks)
-ax.set_xticklabels(flashLabels)
+ax.set_xticklabels(lbls)
 ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-#ax.set_ylim([75,150])
-ax.set_ylabel('Decision time (ms)')
-ax.set_title('Model')
+# ax.set_ylim([350,500])
+ax.set_ylabel('Response time (ms)')
+ax.set_title('Mice')
 ax.legend()
 plt.tight_layout()
+
+
+# plot model response rate and decision time
+sigmaRange = np.arange(0,1.1,0.2)
+for i,sigma in enumerate(sigmaRange):
+    fig = plt.figure()
+    xticks = np.arange(len(lbls))
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+        mean = []
+        sem = []
+        for flashes in lbls:
+            d = [r[i].sum()/r[i].size for r in respModel[region][flashes][lbl]['change']]
+            mean.append(np.nanmean(d))
+            sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
+        ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+        for x,m,s in zip(xticks,mean,sem):
+            ax.plot([x,x],[m-s,m+s],color=clr)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(lbls)
+    ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+    ax.set_ylim([0,1])
+    ax.set_ylabel('Response rate')
+    ax.set_title('Model')
+    ax.legend()
+    plt.tight_layout()
+
+for i,sigma in enumerate(sigmaRange):
+    fig = plt.figure()
+    xticks = np.arange(len(lbls))
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+        mean = []
+        sem = []
+        for flashes in lbls:
+            d = [np.nanmean(r[i]) for r in respTimeModel[region][flashes][lbl]['change']]
+            mean.append(np.nanmean(d))
+            sem.append(np.nanstd(d)/(len(d)**0.5))
+        ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+        for x,m,s in zip(xticks,mean,sem):
+            ax.plot([x,x],[m-s,m+s],color=clr)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(lbls)
+    ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+    #ax.set_ylim([75,150])
+    ax.set_ylabel('Decision time (ms)')
+    ax.set_title('Model')
+    ax.legend()
+    plt.tight_layout()
 
 
 #
@@ -781,6 +786,7 @@ plt.tight_layout()
 # plot threshold and leak
 region = 'VISall'
 mod = 'change'
+s=-1
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
@@ -793,11 +799,11 @@ if mod=='responseTime':
         d.append(b)
     d = np.nanmean(d,axis=0)
 else:
-    d = np.array(trainAccuracy[region][mod])[:,-1].mean(axis=0)
+    d = np.array(trainAccuracy[region][mod])[:,s,-1].mean(axis=0)
 im = ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,-1]
-    thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,-1]
+    lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,s,-1]
+    thresh = np.nanmean(threshold[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(threshold[region][lbl][mod])[:,s,-1]
     ax.plot(lk,thresh,'o',mec=clr,mfc='none',ms=8)
     mx,my = (lk.mean(),thresh.mean())
     sx,sy = (lk.std()/(len(lk)**0.5),thresh.std()/(len(thresh)**0.5))
@@ -1011,6 +1017,7 @@ plt.tight_layout()
 
 # image response matrix
 region = 'VISall'
+s = -4
 
 images = {'G': ['im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'],
           'H': ['im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r']}
@@ -1018,9 +1025,9 @@ images = {'G': ['im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im0
 preImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['preChange']['all'],imageNames[region]['catch']['all'])]
 changeImage = [np.concatenate((change,catch)) for change,catch in zip(imageNames[region]['change']['all'],imageNames[region]['catch']['all'])]
 mouseResp = [np.concatenate((change,catch)) for change,catch in zip(respMiceRegions[region]['change']['all'],respMiceRegions[region]['catch']['all'])]
-modelResp = [np.concatenate((change,catch)) for change,catch in zip(respModel[region]['change']['all']['change'],respModel[region]['catch']['all']['change'])]
+modelResp = [np.concatenate((change[s],catch[s])) for change,catch in zip(respModel[region]['change']['all']['change'],respModel[region]['catch']['all']['change'])]
 mouseRespTime = [np.concatenate((change,catch)) for change,catch in zip(respTimeMiceRegions[region]['change']['all'],respTimeMiceRegions[region]['catch']['all'])]
-modelRespTime = [np.concatenate((change,catch)) for change,catch in zip(respTimeModel[region]['change']['all']['change'],respTimeModel[region]['catch']['all']['change'])]
+modelRespTime = [np.concatenate((change[s],catch[s])) for change,catch in zip(respTimeModel[region]['change']['all']['change'],respTimeModel[region]['catch']['all']['change'])]
 
 respMat = {src: {imgSet: {famNov: [] for famNov in ('familiar','novel')} for imgSet in ('G','H')} for src in ('mouse','model')}
 respTimeMat = copy.deepcopy(respMat)
