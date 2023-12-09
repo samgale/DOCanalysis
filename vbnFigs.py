@@ -786,7 +786,7 @@ plt.tight_layout()
 # plot threshold and leak
 region = 'VISall'
 mod = 'change'
-s=-1
+s=0
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 extent = [leakRange[0] - 0.5*leakRange[0], leakRange[-1] + 0.5*leakRange[0],
