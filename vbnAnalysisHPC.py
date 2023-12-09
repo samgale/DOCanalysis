@@ -322,9 +322,12 @@ def fitIntegratorModel(sessionId):
     tEnd = 150
     binSize = 1
     nBins = int(tEnd/binSize)
-    sigmaRange = np.arange(0,1.1,0.1)
-    leakRange = np.arange(5,100,5)/binSize
-    thresholdRange = np.arange(0.5,20,0.5)
+    thresholdRange = np.arange(0.5,10,0.5)
+    leakRange = np.arange(0.01,0.2,0.01)
+    tauARange = np.arange(5,50,10)
+    tauIRange = np.arange(5,50,10)
+    alphaIRange = np.arange(0.05,0.3,0.1)
+    sigmaRange = np.array([0])
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
@@ -354,8 +357,12 @@ def fitIntegratorModel(sessionId):
     d['regions'] = regions
     d['tEnd'] = tEnd
     d['binSize'] = binSize
-    d['leakRange'] = leakRange
     d['thresholdRange'] = thresholdRange
+    d['leakRange'] = leakRange
+    d['tauARange'] = tauARange
+    d['tauIRange'] = tauIRange
+    d['alphaIRange'] = alphaIRange
+    d['sigmaRange'] = sigmaRange
     d['imageName'] = np.array(stim['image_name'])
     d['change'] = changeFlashes
     d['preChange'] = preChangeFlashes
@@ -453,38 +460,44 @@ def fitIntegratorModel(sessionId):
             w = d[region]['decoderWeights']['allUnitSpikeCount'].mean(axis=0)
             sp *= w[:,None,None]
         flashSp = sp.mean(axis=0)
-        flashSp /= flashSp.max()
+        inputNorm = flashSp.max()
+        flashSp /= inputNorm
+        d[region]['inputNorm'] = inputNorm
         d[region]['integratorInput'] = flashSp
 
-        d[region]['leak'] = {}
         d[region]['threshold'] = {}
+        d[region]['leak'] = {}
+        d[region]['tauA'] = {}
+        d[region]['tauI'] = {}
+        d[region]['alphaI'] = {}
         d[region]['integratorTrainAccuracy'] = {}
         d[region]['integratorTrainRespTime'] = {}
-        d[region]['integratorValue'] = {}
         d[region]['integratorResp'] = {}
         d[region]['integratorRespTime'] = {}
-        d[region]['integratorAccuracy'] = {}
         d[region]['integratorShuffledAccuracy'] = {}
         for lbl in ('change',):
-            leakFit = np.full((sigmaRange.size,nCrossVal+1),np.nan)
-            thresholdFit = leakFit.copy()
-            integratorTrainAccuracy = np.full((sigmaRange.size,nCrossVal+1,thresholdRange.size,leakRange.size),np.nan)
+            thresholdFit = np.full((sigmaRange.size,nCrossVal+1),np.nan)
+            leakFit = thresholdFit.copy()
+            tauAFit = thresholdFit.copy()
+            tauIFit = thresholdFit.copy()
+            alphaIFit = thresholdFit.copy()
+            integratorTrainAccuracy = np.full((sigmaRange.size,nCrossVal+1,thresholdRange.size,leakRange.size,tauARange.size,tauIRange.size,alphaIRange.size),np.nan)
             integratorTrainRespTime = integratorTrainAccuracy.copy()
-            #integratorValue = np.full((sigmaRange.size,nFlash,nBins),np.nan)
             integratorResp = np.full((sigmaRange.size,nFlash),np.nan)
             integratorRespTime = integratorResp.copy()
             for s,sigma in enumerate(sigmaRange):
                 for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
-                    leakFit[s,k],thresholdFit[s,k],integratorTrainAccuracy[s,k],integratorTrainRespTime[s,k] = fitAccumulator(flashSp[train],y[lbl][train],leakRange,thresholdRange,sigma)
-                    integratorResp[s,test],integratorRespTime[s,test] = runAccumulator(flashSp[test],leakFit[s,k],thresholdFit[s,k],sigma)[:2]
-            d[region]['leak'][lbl] = leakFit
+                    thresholdFit[s,k],leakFit[s,k],tauAFit[s,k],tauIFit[s,k],alphaIFit[s,k],integratorTrainAccuracy[s,k],integratorTrainRespTime[s,k] = fitAccumulator(flashSp[train],y[lbl][train],thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigma)
+                    integratorResp[s,test],integratorRespTime[s,test] = runAccumulator(flashSp[test],thresholdFit[s,k],leakFit[s,k],tauAFit[s,k],tauIFit[s,k],alphaIFit[s,k],sigma)[:2]
             d[region]['threshold'][lbl] = thresholdFit
+            d[region]['leak'][lbl] = leakFit
+            d[region]['tauA'][lbl] = tauAFit
+            d[region]['tauI'][lbl] = tauIFit
+            d[region]['alphaI'][lbl] = alphaIFit
             d[region]['integratorTrainAccuracy'][lbl] = integratorTrainAccuracy
             d[region]['integratorTrainRespTime'][lbl] = integratorTrainRespTime
-            #d[region]['integratorValue'][lbl] = integratorValue
             d[region]['integratorResp'][lbl] = integratorResp
             d[region]['integratorRespTime'][lbl] = integratorRespTime
-            d[region]['integratorAccuracy'][lbl] = [sklearn.metrics.balanced_accuracy_score(y[lbl][trainInd[lbl][-1]],resp[trainInd[lbl][-1]]) for resp in integratorResp]
             if lbl == 'hit':
                 d[region]['integratorShuffledAccuracy'][lbl] = []
                 for _ in range(nShuffles):

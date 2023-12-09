@@ -263,43 +263,58 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulator(accumulatorInput,y,leakRange,thresholdRange,sigma=0):
-    accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
-    respTime = accuracy.copy()
+def fitAccumulator(accumulatorInput,y,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigma=0):
+    logLoss = np.full((len(thresholdRange),len(leakRange),len(tauARange),len(tauIRange),len(alphaIRange)),np.nan)
+    respTime = logLoss.copy()
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
-            resp,rt = runAccumulator(accumulatorInput,leak,thresh,sigma)[:2]
-            accuracy[i,j] = sklearn.metrics.balanced_accuracy_score(y,resp)
-            respTime[i,j] = np.nanmean(rt)
-    # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
+            for k,tauA in enumerate(tauARange):
+                for m,tauI in enumerate(tauIRange):
+                    for n,alphaI in enumerate(alphaIRange):
+                        resp,rt = runAccumulator(accumulatorInput,leak,thresh,tauA,tauI,alphaI,sigma)[:2]
+                        logLoss[i,j,k,m,n] = sklearn.metrics.log_loss(y,resp)
+                        respTime[i,j,k,m,n] = np.nanmean(rt)
+    # i,j = np.unravel_index(np.argmin(logLoss),logLoss.shape)
     # leakFit = leakRange[j]
     # thresholdFit = thresholdRange[i]
-    i,j = np.where(accuracy==accuracy.max())
-    s = np.stack((i,j))
+    i,j,k,m,n = np.where(logLoss==logLoss.min())
+    s = np.stack((i,j,k,m,n))
     s = np.argmin(np.sum((s - np.mean(s,axis=1)[:,None])**2,axis=0)**0.5)
-    leakFit = leakRange[j[s]]
     thresholdFit = thresholdRange[i[s]]
-    return leakFit,thresholdFit,accuracy,respTime
+    leakFit = leakRange[j[s]]
+    tauAFit = tauARange[k[s]]
+    tauIFit = tauIRange[m[s]]
+    alphaIFit = alphaIRange[n[s]]
+    return thresholdFit,leakFit,tauAFit,tauIFit,alphaIFit,logLoss,respTime
 
 
-def runAccumulator(accumulatorInput,leak,threshold,sigma=0,recordValues=False):
+def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=10,recordValues=False):
+    nReps = nReps if sigma > 0 else 1
     nTrials = len(accumulatorInput)
-    resp = np.zeros(nTrials,dtype=bool)
-    respTime = np.full(nTrials,np.nan)
+    resp = np.zeros((nReps,nTrials),dtype=bool)
+    respTime = np.full((nReps,nTrials),np.nan)
     accumulatorValue = []
-    for trial,trialInput in enumerate(accumulatorInput):
-        av = []
-        a = 0
-        for t,s in enumerate(trialInput):
-            a += s + random.gauss(0,sigma) - a/leak
-            if recordValues:
-                av.append(a)
-            if not resp[trial] and a > threshold:
-                resp[trial] = True
-                respTime[trial] = t
-                if not recordValues:
-                    break
+    for n in range(nReps):
         if recordValues:
-            accumulatorValue.append(av)
+            accumulatorValue.append([])
+        for trial,trialInput in enumerate(accumulatorInput):
+            if recordValues:
+                accumulatorValue[-1].append([])
+            a = 0
+            i = 0
+            for t,s in enumerate(trialInput):
+                sn = s / (alphaI + i) if i > 0 else s
+                a += (sn + random.gauss(0,sigma) - a*leak) / tauA
+                if tauI > 0:
+                    i += (s - i) / tauI
+                if not resp[n,trial] and a > threshold:
+                    resp[n,trial] = True
+                    respTime[n,trial] = t
+                    if not recordValues:
+                        break
+                if recordValues:
+                    accumlatorValue[-1][-1].append(a)
+    resp = np.mean(resp,axis=0)
+    respTime = np.nanmean(respTime,axis=0)
     return resp,respTime,accumulatorValue
 
