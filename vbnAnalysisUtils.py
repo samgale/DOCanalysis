@@ -6,11 +6,14 @@ Created on Fri Sep 29 14:39:37 2023
 """
 
 import os
+import pathlib
 import math
 import random
 import numpy as np
+import pandas as pd
 import scipy.stats
 import scipy.cluster
+import scipy.optimize
 import sklearn
 import matplotlib
 import matplotlib.pyplot as plt
@@ -70,7 +73,7 @@ def getBehavData(stim):
 def getUnitsInRegion(units,region,layer=None,rs=False,fs=False):
     if region in ('SC/MRN cluster 1','SC/MRN cluster 2'):
         clust = 1 if '1' in region else 2
-        dirPath = '/allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis'
+        dirPath = pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis')
         clustId = np.load(os.path.join(dirPath,'sc_mrn_clusterId.npy'))
         clustUnitId = np.load(os.path.join(dirPath,'sc_mrn_clusterUnitId.npy'))
         u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
@@ -96,6 +99,13 @@ def getUnitsInRegion(units,region,layer=None,rs=False,fs=False):
                     inRegion = inRegion & rsUnits
                 elif fs and not rs:
                     inRegion = inRegion & ~rsUnits
+        if 'cluster' in region:
+            clustTable = pd.read_csv(pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables/units_with_fast_slow_cluster_ids.csv'))
+            clustId = np.array(clustTable['fast_slow_cluster_id'])
+            clustUnitId = np.array(clustTable['unit_id'])
+            clust = 1 if 'cluster 1' in region else 2
+            u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
+            inRegion = np.in1d(units.index,u)
     return inRegion
     
 
@@ -263,29 +273,38 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulator(accumulatorInput,y,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigma=0):
-    logLoss = np.full((len(thresholdRange),len(leakRange),len(tauARange),len(tauIRange),len(alphaIRange)),np.nan)
-    respTime = logLoss.copy()
+def fitAccumulatorBrute(accumulatorInput,y,thresholdRange,leakRange):
+    accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
+    respTime = accuracy.copy()
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
-            for k,tauA in enumerate(tauARange):
-                for m,tauI in enumerate(tauIRange):
-                    for n,alphaI in enumerate(alphaIRange):
-                        resp,rt = runAccumulator(accumulatorInput,leak,thresh,tauA,tauI,alphaI,sigma)[:2]
-                        logLoss[i,j,k,m,n] = sklearn.metrics.log_loss(y,resp)
-                        respTime[i,j,k,m,n] = np.nanmean(rt)
-    # i,j = np.unravel_index(np.argmin(logLoss),logLoss.shape)
+            resp,rt = runAccumulator(accumulatorInput,thresh,leak)[:2]
+            accuracy[i,j] = sklearn.metrics.accuracy_score(y,resp)
+            respTime[i,j] = np.nanmean(rt)
+    # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
     # leakFit = leakRange[j]
     # thresholdFit = thresholdRange[i]
-    i,j,k,m,n = np.where(logLoss==logLoss.min())
-    s = np.stack((i,j,k,m,n))
+    i,j = np.where(accuracy==accuracy.max())
+    s = np.stack((i,j))
     s = np.argmin(np.sum((s - np.mean(s,axis=1)[:,None])**2,axis=0)**0.5)
     thresholdFit = thresholdRange[i[s]]
     leakFit = leakRange[j[s]]
-    tauAFit = tauARange[k[s]]
-    tauIFit = tauIRange[m[s]]
-    alphaIFit = alphaIRange[n[s]]
-    return thresholdFit,leakFit,tauAFit,tauIFit,alphaIFit,logLoss,respTime
+    return thresholdFit,leakFit,accuracy,respTime
+
+
+def fitAccumulator(accumulatorInput,y,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange):
+    bounds = (thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange)
+    fit = scipy.optimize.direct(evalAccumulator,bounds,args=(accumulatorInput,y))
+    params = fit.x
+    logLoss = fit.fun
+    return params,logLoss
+
+
+def evalAccumulator(params,*args):
+    accumulatorInput,y = args
+    prediction = runAccumulator(accumulatorInput,*params)[0]
+    logLoss = sklearn.metrics.log_loss(y,prediction)
+    return logLoss
 
 
 def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=10,recordValues=False):
