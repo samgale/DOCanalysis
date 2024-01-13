@@ -30,5 +30,5 @@ baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/sup
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 sessionIds = stimTable['session_id'].unique()
 # sessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
-for sessionId in sessionIds[:1]:
+for sessionId in sessionIds:
     slurm.sbatch('{} {} --sessionId {}'.format(python_path,script_path,sessionId))

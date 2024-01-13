@@ -324,12 +324,12 @@ def fitIntegratorModel(sessionId):
     tEnd = 150
     binSize = 1
     nBins = int(tEnd/binSize)
-    thresholdRange = (0.1,20) # np.arange(0.5,20,0.5)
-    leakRange = (0.01,1) # np.arange(0.01,0.2,0.01)
-    tauARange = (1,100) # np.arange(5,50,5)
-    tauIRange = (1,100) # np.arange(5,100,10)
+    thresholdRange = (0.1,10) # np.arange(0.5,20,0.5)
+    leakRange = (0,1) # np.arange(0.01,0.2,0.01)
+    tauARange = (1,150) # np.arange(5,50,5)
+    tauIRange = (1,150) # np.arange(5,100,10)
     alphaIRange = (0.01,1) # np.arange(0.05,0.5,0.05)
-    sigmaRange = (0,1) #np.arange(0,1.1,0.2)
+    sigmaRange = (0,10) #np.arange(0,1.1,0.2)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
@@ -472,6 +472,8 @@ def fitIntegratorModel(sessionId):
         d[region]['tauA'] = {}
         d[region]['tauI'] = {}
         d[region]['alphaI'] = {}
+        d[region]['sigma'] = {}
+        d[region]['integratorTrainLogLoss'] = {}
         d[region]['integratorTrainAccuracy'] = {}
         d[region]['integratorTrainRespTime'] = {}
         d[region]['integratorResp'] = {}
@@ -503,6 +505,7 @@ def fitIntegratorModel(sessionId):
             d[region]['tauI'][lbl] = tauIFit
             d[region]['alphaI'][lbl] = alphaIFit
             d[region]['sigma'][lbl] = sigmaFit
+            d[region]['integratorTrainLogLoss'][lbl] = integratorTrainLogLoss
             d[region]['integratorTrainAccuracy'][lbl] = integratorTrainAccuracy
             d[region]['integratorTrainRespTime'][lbl] = integratorTrainRespTime
             d[region]['integratorResp'][lbl] = integratorResp

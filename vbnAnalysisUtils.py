@@ -307,7 +307,7 @@ def evalAccumulator(params,*args):
     return logLoss
 
 
-def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=10,recordValues=False):
+def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=20,recordValues=False):
     nReps = nReps if sigma > 0 else 1
     nTrials = len(accumulatorInput)
     resp = np.zeros((nReps,nTrials),dtype=bool)
