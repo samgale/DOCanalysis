@@ -456,7 +456,7 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall',) #('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','VISall','SC/MRN cluster 2')
+regions = ('VISall','VISall cluster 1','VISall cluster 2')
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
@@ -469,11 +469,13 @@ respMiceRegions = {region: {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} 
 respTimeMiceRegions = copy.deepcopy(respMiceRegions)
 imageNames = copy.deepcopy(respMiceRegions)
 integratorInput = copy.deepcopy(respMiceRegions)
-integratorValue = {region: {flashes: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
-respModel = copy.deepcopy(integratorValue)
-respTimeModel = copy.deepcopy(integratorValue)
-leak = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
-threshold = copy.deepcopy(leak)
+respModel = {region: {flashes: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
+respTimeModel = copy.deepcopy(respModel)
+threshold = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
+leak = copy.deepcopy(threshold)
+tauA = copy.deepcopy(threshold)
+tauI = copy.deepcopy(threshold)
+alphaI = copy.deepcopy(threshold)
 novelSession = {region: [] for region in regions}
 trainAccuracy = {region: {modLbl: [] for modLbl in modelLabels} for region in regions}
 trainRespTime = copy.deepcopy(trainAccuracy)
@@ -484,10 +486,14 @@ for i,f in enumerate(filePaths):
     with h5py.File(f,'r') as d:
         if i==0:
             tEnd = d['tEnd'][()]
-            binSize = 5
+            binSize = d['binSize'][()]
             t = np.arange(0,tEnd,binSize)
-            leakRange = d['leakRange'][()]
             thresholdRange = d['thresholdRange'][()]
+            leakRange = d['leakRange'][()]
+            tauARange = d['tauARange'][()]
+            tauIRange = d['tauIRange'][()]
+            alphaIRange = d['alphaIRange'][()]
+            sigmaRange = d['sigmaRange'][()]
         novel = d['novel'][()]
         for j,region in enumerate(regions):
             if len(d[region]) > 0:
@@ -500,7 +506,6 @@ for i,f in enumerate(filePaths):
                 for decoder in decoderLabels:
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 intgInput = d[region]['integratorInput'][()]
-                # intgVal = {mod: d[region]['integratorValue'][mod][()] for mod in modelLabels}
                 intgResp = {mod: d[region]['integratorResp'][mod][()] for mod in modelLabels}
                 intgRt = {mod: d[region]['integratorRespTime'][mod][()] for mod in modelLabels}
             for k,flashes in enumerate(flashLabels):
@@ -521,35 +526,40 @@ for i,f in enumerate(filePaths):
                         imageNames[region][flashes][lbl].append(d['imageName'].asstr()[ind])
                         integratorInput[region][flashes][lbl].append(intgInput[ind].mean(axis=0))
                         for mod in modelLabels:
-                            # integratorValue[region][flashes][lbl][mod].append(intgVal[mod][:,ind].mean(axis=1))
-                            respModel[region][flashes][lbl][mod].append(intgResp[mod][:,ind])
-                            respTimeModel[region][flashes][lbl][mod].append(intgRt[mod][:,ind])
+                            respModel[region][flashes][lbl][mod].append(intgResp[mod][ind])
+                            respTimeModel[region][flashes][lbl][mod].append(intgRt[mod][ind])
                             if k==0:
-                                leak[region][lbl][mod].append(d[region]['leak'][mod][()])
                                 threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
+                                leak[region][lbl][mod].append(d[region]['leak'][mod][()])
+                                tauA[region][lbl][mod].append(d[region]['tauA'][mod][()])
+                                tauI[region][lbl][mod].append(d[region]['tauI'][mod][()])
+                                alphaI[region][lbl][mod].append(d[region]['alphaI'][mod][()])
+                                
 
 
 # plot mean input spike rate
-for flashes in ('change','preChange'): #flashLabels:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
-    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        d = np.array(integratorInput[region][flashes][lbl])
-        m = np.nanmean(d,axis=0)
-        n = np.sum(~np.isnan(d[:,0]))
-        s = np.nanstd(d,axis=0)/(n**0.5)
-        ax.plot(t,m,color=clr,label=lbl+' (n='+str(n)+')')
-        ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    # ax.set_xlim([tStart,tEnd])
-    # ax.set_ylim([-1,16])
-    ax.set_xlabel('Time from flash onset (ms)')
-    ax.set_ylabel('Weighted Spikes/s')
-    ax.set_title(region+', '+flashes)
-    ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
-    plt.tight_layout()
+for region in regions:
+    for flashes in ('change',): #flashLabels:
+        fig = plt.figure()
+        ax = fig.add_subplot(1,1,1)
+        for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+            d = np.array(integratorInput[region][flashes][lbl])
+            if len(d) > 0:
+                m = np.nanmean(d,axis=0)
+                n = np.sum(~np.isnan(d[:,0]))
+                s = np.nanstd(d,axis=0)/(n**0.5)
+                ax.plot(t,m,color=clr,label=lbl+' (n='+str(n)+')')
+                ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        # ax.set_xlim([tStart,tEnd])
+        # ax.set_ylim([-1,16])
+        ax.set_xlabel('Time from flash onset (ms)')
+        ax.set_ylabel('Weighted Spikes/s')
+        ax.set_title(region+', '+flashes)
+        ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
+        plt.tight_layout()
 
 
 # plot integrator value
@@ -631,58 +641,55 @@ plt.tight_layout()
 
 
 # plot model response rate and decision time
-sigmaRange = np.arange(0,1.1,0.2)
-for i,sigma in enumerate(sigmaRange):
-    fig = plt.figure()
-    xticks = np.arange(len(lbls))
-    ax = fig.add_subplot(1,1,1)
-    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        mean = []
-        sem = []
-        for flashes in lbls:
-            d = [r[i].sum()/r[i].size for r in respModel[region][flashes][lbl]['change']]
-            mean.append(np.nanmean(d))
-            sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
-        ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
-        for x,m,s in zip(xticks,mean,sem):
-            ax.plot([x,x],[m-s,m+s],color=clr)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(lbls)
-    ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-    ax.set_ylim([0,1])
-    ax.set_ylabel('Response rate')
-    ax.set_title('Model')
-    ax.legend()
-    plt.tight_layout()
+fig = plt.figure()
+xticks = np.arange(len(lbls))
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+    mean = []
+    sem = []
+    for flashes in lbls:
+        d = [r.sum()/r.size for r in respModel[region][flashes][lbl]['change']]
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(lbls)
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+ax.set_ylim([0,1])
+ax.set_ylabel('Response rate')
+ax.set_title('Model')
+ax.legend()
+plt.tight_layout()
 
-for i,sigma in enumerate(sigmaRange):
-    fig = plt.figure()
-    xticks = np.arange(len(lbls))
-    ax = fig.add_subplot(1,1,1)
-    for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
-        mean = []
-        sem = []
-        for flashes in lbls:
-            d = [np.nanmean(r[i]) for r in respTimeModel[region][flashes][lbl]['change']]
-            mean.append(np.nanmean(d))
-            sem.append(np.nanstd(d)/(len(d)**0.5))
-        ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
-        for x,m,s in zip(xticks,mean,sem):
-            ax.plot([x,x],[m-s,m+s],color=clr)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(lbls)
-    ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
-    #ax.set_ylim([75,150])
-    ax.set_ylabel('Decision time (ms)')
-    ax.set_title('Model')
-    ax.legend()
-    plt.tight_layout()
+fig = plt.figure()
+xticks = np.arange(len(lbls))
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+    mean = []
+    sem = []
+    for flashes in lbls:
+        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]['change']]
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(len(d)**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(lbls)
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+#ax.set_ylim([75,150])
+ax.set_ylabel('Decision time (ms)')
+ax.set_title('Model')
+ax.legend()
+plt.tight_layout()
 
 
 #
@@ -799,7 +806,7 @@ if mod=='responseTime':
         d.append(b)
     d = np.nanmean(d,axis=0)
 else:
-    d = np.array(trainAccuracy[region][mod])[:,s,-1].mean(axis=0)
+    d = np.array(trainAccuracy[region][mod])[:,s,-1].mean(axis=(0,3,4,5))
 im = ax.imshow(d,cmap='gray',interpolation='none',extent=extent,aspect='auto',origin='lower')
 for lbl,clr in zip(('familiar','novel'),'gm'):
     lk = np.nanmean(leak[region][lbl][mod],axis=1) if mod=='responseTime' else np.array(leak[region][lbl][mod])[:,s,-1]
@@ -816,25 +823,26 @@ ax.set_title('average model accuracy')
 cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
 plt.tight_layout()
 
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-for lbl,clr in zip(('familiar','novel'),'gm'):
-    dsort = np.sort(np.array(threshold[region][lbl][mod])[:,-1] )
-    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
-    ax.plot(dsort,cumProb,color=clr,label=lbl)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_ylim([0,1.01])
-ax.set_xlabel('Integrator threshold (spikes/neuron)')
-ax.set_ylabel('Cumulative probability')
-ax.legend()
-plt.tight_layout()
+for paramVal,paramName in zip((threshold,leak,tauA,tauI,alphaI),('threshold','leak','tauA','tauI','alphaI')):
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(('familiar','novel'),'gm'):
+        dsort = np.sort(np.array(paramVal[region][lbl][mod])[:,s,-1])
+        cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+        ax.plot(dsort,cumProb,color=clr,label=lbl)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_ylim([0,1.01])
+    ax.set_xlabel(paramName)
+    ax.set_ylabel('Cumulative probability')
+    ax.legend()
+    plt.tight_layout()
 
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 for lbl,clr in zip(('familiar','novel'),'gm'):
-    dsort = np.sort(np.array(leak[region][lbl][mod])[:,-1])
+    dsort = np.sort(np.array(leak[region][lbl][mod])[:,s,-1])
     cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
     ax.plot(dsort,cumProb,color=clr,label=lbl)
 for side in ('right','top'):
