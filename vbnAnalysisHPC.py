@@ -18,7 +18,7 @@ import h5py
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
-from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInRegion, findResponsiveUnits, getTrainTestSplits, trainDecoder, fitAccumulator, runAccumulator
+from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInRegion, findResponsiveUnits, getTrainTestSplits, trainDecoder, fitAccumulatorBrute, fitAccumulator, runAccumulator
 
 
 baseDir = pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables')
@@ -312,10 +312,10 @@ def decodeChange(sessionId):
 
 
 def fitIntegratorModel(sessionId):
-    regions = ('VISall cluster 1','VISall cluster 2','VISall')
+    regions = ('VISall',)
     layer = None
     weighted = False
-    bruteFit = False
+    bruteFit = True
     nCrossVal = 5
     nShuffles = 1
     minUnits = 20
@@ -324,12 +324,13 @@ def fitIntegratorModel(sessionId):
     tEnd = 150
     binSize = 1
     nBins = int(tEnd/binSize)
-    thresholdRange = (0.1,10) # np.arange(0.5,20,0.5)
-    leakRange = (0,1) # np.arange(0.01,0.2,0.01)
-    tauARange = (1,150) # np.arange(5,50,5)
-    tauIRange = (1,150) # np.arange(5,100,10)
-    alphaIRange = (0.01,1) # np.arange(0.05,0.5,0.05)
-    sigmaRange = (0,10) #np.arange(0,1.1,0.2)
+    thresholdRange = np.arange(0.5,10.1,0.5)
+    leakRange = np.arange(0.01,0.21,0.01)
+    wNovelRange = np.arange(-0.5,0.51,0.05)
+    tauARange = np.array([0])#(1,150) # np.arange(5,50,5)
+    tauIRange = np.array([0])#(1,150) # np.arange(5,100,10)
+    alphaIRange = np.array([0])#(0.01,1) # np.arange(0.05,0.5,0.05)
+    sigmaRange = np.array([0])#(0,10) #np.arange(0,1.1,0.2)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
@@ -361,6 +362,7 @@ def fitIntegratorModel(sessionId):
     d['binSize'] = binSize
     d['thresholdRange'] = thresholdRange
     d['leakRange'] = leakRange
+    d['wNovelRange'] = wNovelRange
     d['tauARange'] = tauARange
     d['tauIRange'] = tauIRange
     d['alphaIRange'] = alphaIRange
@@ -469,6 +471,7 @@ def fitIntegratorModel(sessionId):
 
         d[region]['threshold'] = {}
         d[region]['leak'] = {}
+        d[region]['wNovel'] = {}
         d[region]['tauA'] = {}
         d[region]['tauI'] = {}
         d[region]['alphaI'] = {}
@@ -482,25 +485,27 @@ def fitIntegratorModel(sessionId):
         for lbl in ('change',):
             thresholdFit = np.full(nCrossVal+1,np.nan)
             leakFit = thresholdFit.copy()
+            wNovelFit = thresholdFit.copy()
             tauAFit = thresholdFit.copy()
             tauIFit = thresholdFit.copy()
             alphaIFit = thresholdFit.copy()
             sigmaFit = thresholdFit.copy()
             integratorTrainLogLoss = thresholdFit.copy()
-            integratorTrainAccuracy = np.full((nCrossVal+1,len(thresholdRange),len(leakRange)),np.nan)
+            integratorTrainAccuracy = np.full((nCrossVal+1,len(thresholdRange),len(leakRange),len(wNovelRange)),np.nan)
             integratorTrainRespTime = integratorTrainAccuracy.copy()
             integratorResp = np.full(nFlash,np.nan)
             integratorRespTime = integratorResp.copy()
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
                 if bruteFit:
-                    thresholdFit[k],leakFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],y[lbl][train],thresholdRange,leakRange)
-                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],thresholdFit[k],leakFit[k])[:2]
+                    thresholdFit[k],leakFit[k],wNovelFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],y[lbl][train],thresholdRange,leakRange,wNovelRange,novelFlashes[train])
+                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],thresholdFit[k],leakFit[k],wNovelFit[k],novelFlashes[test])[:2]
                 else:
                     params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],y[lbl][train],thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange)
                     thresholdFit[k],leakFit[k],tauAFit[k],tauIFit[k],alphaIFit[k],sigmaFit[k] = params
                     integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],*params)[:2]
             d[region]['threshold'][lbl] = thresholdFit
             d[region]['leak'][lbl] = leakFit
+            d[region]['wNovel'][lbl] = wNovelFit
             d[region]['tauA'][lbl] = tauAFit
             d[region]['tauI'][lbl] = tauIFit
             d[region]['alphaI'][lbl] = alphaIFit

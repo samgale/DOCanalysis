@@ -273,23 +273,25 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulatorBrute(accumulatorInput,y,thresholdRange,leakRange):
-    accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
+def fitAccumulatorBrute(accumulatorInput,y,thresholdRange,leakRange,wNovelRange,novelFlashes):
+    accuracy = np.full((len(thresholdRange),len(leakRange),len(wNovelRange)),np.nan)
     respTime = accuracy.copy()
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
-            resp,rt = runAccumulator(accumulatorInput,thresh,leak)[:2]
-            accuracy[i,j] = sklearn.metrics.accuracy_score(y,resp)
-            respTime[i,j] = np.nanmean(rt)
+            for k,wNovel in enumerate(wNovelRange):
+                resp,rt = runAccumulator(accumulatorInput,thresh,leak,wNovel,novelFlashes)[:2]
+                accuracy[i,j,k,l] = sklearn.metrics.accuracy_score(y,resp)
+                respTime[i,j,k,l] = np.nanmean(rt)                  
     # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
     # leakFit = leakRange[j]
     # thresholdFit = thresholdRange[i]
-    i,j = np.where(accuracy==accuracy.max())
-    s = np.stack((i,j))
+    i,j,k = np.where(accuracy==accuracy.max())
+    s = np.stack((i,j,k))
     s = np.argmin(np.sum((s - np.mean(s,axis=1)[:,None])**2,axis=0)**0.5)
     thresholdFit = thresholdRange[i[s]]
     leakFit = leakRange[j[s]]
-    return thresholdFit,leakFit,accuracy,respTime
+    wNovelFit = wNovelRange[k[s]]
+    return thresholdFit,leakFit,wFamiliarFit,wNovelFit,accuracy,respTime
 
 
 def fitAccumulator(accumulatorInput,y,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange):
@@ -307,7 +309,7 @@ def evalAccumulator(params,*args):
     return logLoss
 
 
-def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=20,recordValues=False):
+def runAccumulator(accumulatorInput,threshold,leak,wNovel,novelFlashes,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=20,recordValues=False):
     nReps = nReps if sigma > 0 else 1
     nTrials = len(accumulatorInput)
     resp = np.zeros((nReps,nTrials),dtype=bool)
@@ -317,6 +319,8 @@ def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=
         if recordValues:
             accumulatorValue.append([])
         for trial,trialInput in enumerate(accumulatorInput):
+            if (wNovel < 0 and novelFlashes[trial]) or (wNovel > 0 and not novelFlashes[trial]):
+                trialInput = trialInput * (1 - abs(wNovel))
             if recordValues:
                 accumulatorValue[-1].append([])
             a = 0
