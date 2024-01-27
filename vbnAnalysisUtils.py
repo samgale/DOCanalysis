@@ -273,15 +273,15 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulatorBrute(accumulatorInput,y,thresholdRange,leakRange,wNovelRange,novelFlashes):
+def fitAccumulatorBrute(accumulatorInput,novelFlashes,y,thresholdRange,leakRange,wNovelRange):
     accuracy = np.full((len(thresholdRange),len(leakRange),len(wNovelRange)),np.nan)
     respTime = accuracy.copy()
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
             for k,wNovel in enumerate(wNovelRange):
-                resp,rt = runAccumulator(accumulatorInput,thresh,leak,wNovel,novelFlashes)[:2]
-                accuracy[i,j,k,l] = sklearn.metrics.accuracy_score(y,resp)
-                respTime[i,j,k,l] = np.nanmean(rt)                  
+                resp,rt = runAccumulator(accumulatorInput,novelFlashes,thresh,leak,wNovel)[:2]
+                accuracy[i,j,k] = sklearn.metrics.accuracy_score(y,resp)
+                respTime[i,j,k] = np.nanmean(rt)                  
     # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
     # leakFit = leakRange[j]
     # thresholdFit = thresholdRange[i]
@@ -291,25 +291,25 @@ def fitAccumulatorBrute(accumulatorInput,y,thresholdRange,leakRange,wNovelRange,
     thresholdFit = thresholdRange[i[s]]
     leakFit = leakRange[j[s]]
     wNovelFit = wNovelRange[k[s]]
-    return thresholdFit,leakFit,wFamiliarFit,wNovelFit,accuracy,respTime
+    return thresholdFit,leakFit,wNovelFit,accuracy,respTime
 
 
-def fitAccumulator(accumulatorInput,y,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange):
-    bounds = (thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange)
-    fit = scipy.optimize.direct(evalAccumulator,bounds,args=(accumulatorInput,y))
+def fitAccumulator(accumulatorInput,novelFlashes,y,thresholdRange,leakRange,wNovelRange,sigmaRange):
+    bounds = (thresholdRange,leakRange,wNovelRange,sigmaRange)
+    fit = scipy.optimize.direct(evalAccumulator,bounds,args=(accumulatorInput,novelFlashes,y))
     params = fit.x
     logLoss = fit.fun
     return params,logLoss
 
 
 def evalAccumulator(params,*args):
-    accumulatorInput,y = args
-    prediction = runAccumulator(accumulatorInput,*params)[0]
+    accumulatorInput,novelFlashes,y = args
+    prediction = runAccumulator(accumulatorInput,novelFlashes,*params)[0]
     logLoss = sklearn.metrics.log_loss(y,prediction)
     return logLoss
 
 
-def runAccumulator(accumulatorInput,threshold,leak,wNovel,novelFlashes,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=20,recordValues=False):
+def runAccumulator(accumulatorInput,novelFlashes,threshold,leak,wNovel,sigma=0,tauA=1,tauI=0,alphaI=0,nReps=20,recordValues=False):
     nReps = nReps if sigma > 0 else 1
     nTrials = len(accumulatorInput)
     resp = np.zeros((nReps,nTrials),dtype=bool)
