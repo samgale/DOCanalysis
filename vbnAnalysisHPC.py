@@ -324,9 +324,10 @@ def fitIntegratorModel(sessionId):
     tEnd = 150
     binSize = 1
     nBins = int(tEnd/binSize)
-    thresholdRange = np.arange(0.5,12,0.5)
-    leakRange = np.arange(0.01,0.2,0.01)
-    wNovelRange = np.arange(-0.7,0.5,0.05)
+    thresholdRange = np.arange(1,25,1)
+    leakRange = np.arange(0.01,0.25,0.01)
+    wTimingRange = np.arange(0,1,0.05)
+    wNovelRange = np.array([0])
     sigmaRange = np.array([0]) #np.arange(0,1.1,0.2)
     tauARange = np.array([0])#(1,150) # np.arange(5,50,5)
     tauIRange = np.array([0])#(1,150) # np.arange(5,100,10)
@@ -341,6 +342,12 @@ def fitIntegratorModel(sessionId):
     lickLatency = lickTimes - flashTimes
     nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
+
+    trialFlashAllSessions = stimTable['trial_flash']
+    changeFlashAllSessions = trialFlashAllSessions[stimTable['is_change']]
+    changeProb = np.histogram(changeFlashAllSessions,bins=np.arange(trialFlashAllSessions.max()+2))[0] / len(changeFlashAllSessions)
+    changeProb /= changeProb.max()
+    pChange = changeProb[stim['trial_flash']]
 
     outcome = []
     for lbl in ('hit','miss','false_alarm','correct_reject'):
@@ -362,6 +369,7 @@ def fitIntegratorModel(sessionId):
     d['binSize'] = binSize
     d['thresholdRange'] = thresholdRange
     d['leakRange'] = leakRange
+    d['wTimingRange'] = wTimingRange
     d['wNovelRange'] = wNovelRange
     d['sigmaRange'] = sigmaRange
     d['tauARange'] = tauARange
@@ -471,6 +479,7 @@ def fitIntegratorModel(sessionId):
 
         d[region]['threshold'] = {}
         d[region]['leak'] = {}
+        d[region]['wTiming'] = {}
         d[region]['wNovel'] = {}
         d[region]['sigma'] = {}
         d[region]['tauA'] = {}
@@ -482,29 +491,31 @@ def fitIntegratorModel(sessionId):
         d[region]['integratorResp'] = {}
         d[region]['integratorRespTime'] = {}
         d[region]['integratorShuffledAccuracy'] = {}
-        for lbl in ('all',):
+        for lbl in ('all','change'):
             thresholdFit = np.full(nCrossVal+1,np.nan)
             leakFit = thresholdFit.copy()
+            wTimingFit = thresholdFit.copy()
             wNovelFit = thresholdFit.copy()
             sigmaFit = thresholdFit.copy()
             tauAFit = thresholdFit.copy()
             tauIFit = thresholdFit.copy()
             alphaIFit = thresholdFit.copy()
             integratorTrainLogLoss = thresholdFit.copy()
-            integratorTrainAccuracy = np.full((nCrossVal+1,len(thresholdRange),len(leakRange),len(wNovelRange)),np.nan)
+            integratorTrainAccuracy = np.full((nCrossVal+1,len(thresholdRange),len(leakRange),len(wTimingRange)),np.nan)
             integratorTrainRespTime = integratorTrainAccuracy.copy()
             integratorResp = np.full(nFlash,np.nan)
             integratorRespTime = integratorResp.copy()
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
                 if bruteFit:
-                    thresholdFit[k],leakFit[k],wNovelFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,wNovelRange)
-                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],novelFlashes[test],thresholdFit[k],leakFit[k],wNovelFit[k])[:2]
+                    thresholdFit[k],leakFit[k],wTimingFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,wTimingRange)
+                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],thresholdFit[k],leakFit[k],wTimingFit[k])[:2]
                 else:
-                    params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,wNovelRange,sigmaRange)
-                    thresholdFit[k],leakFit[k],wNovelFit[k],sigmaFit[k] = params
-                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],novelFlashes[test],*params)[:2]
+                    params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,wTimingRange,sigmaRange)
+                    thresholdFit[k],leakFit[k],wTimingFit[k],sigmaFit[k] = params
+                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],*params)[:2]
             d[region]['threshold'][lbl] = thresholdFit
             d[region]['leak'][lbl] = leakFit
+            d[region]['wTiming'][lbl] = wTimingFit
             d[region]['wNovel'][lbl] = wNovelFit
             d[region]['sigma'][lbl] = sigmaFit
             d[region]['tauA'][lbl] = tauAFit
