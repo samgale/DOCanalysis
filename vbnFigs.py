@@ -28,6 +28,143 @@ unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 sessionIds = stimTable['session_id'].unique()
+novelSessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
+
+
+#
+trialFlashAllSessions = stimTable['trial_flash']
+changeFlashAllSessions = trialFlashAllSessions[stimTable['is_change']]
+changeProbAll = np.histogram(changeFlashAllSessions,bins=np.arange(trialFlashAllSessions.max()+2))[0] / len(changeFlashAllSessions)
+lickProb = np.zeros((len(sessionIds),len(changeProbAll)))
+for i,sessionId in enumerate(sessionIds):
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+    for j in range(lickProb.shape[1]):
+        ind = nonChangeFlashes & (stim['trial_flash']==j)
+        lickProb[i,j] = np.sum(ind & lick)/np.sum(ind)
+lickProbAll = np.mean(lickProb,axis=0)
+lickProbAll[np.isnan(lickProbAll)] = 0
+        
+flashLabels = ('change','non-change')
+imageLabels = ('familiar','familiarNovel','novel')
+pChange = {flashLbl: {imgLbl: [] for imgLbl in imageLabels} for flashLbl in flashLabels}
+pLick = copy.deepcopy(pChange)
+for sessionId in sessionIds:
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+    for flashLbl,flashes in zip(flashLabels,(changeFlashes,nonChangeFlashes)):
+        for imgLbl in imageLabels:
+            if imgLbl=='familiar':
+                if np.any(novelFlashes):
+                    continue
+                i = flashes
+            else:
+                if ~np.any(novelFlashes):
+                    continue
+                elif imgLbl=='novel':
+                    i = flashes & novelFlashes
+                else:
+                    i = flashes & ~novelFlashes  
+            pChange[flashLbl][imgLbl].append(changeProbAll[stim['trial_flash'][i]])
+            pLick[flashLbl][imgLbl].append(lickProbAll[stim['trial_flash'][i]])
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+xticks = np.arange(len(flashLabels))
+for lbl,clr in zip(imageLabels,'kgm'):
+    mean = []
+    sem = []
+    for flashes in flashLabels:
+        d = [np.mean(p) for p in pLick[flashes][lbl]]
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(flashLabels)
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+ax.set_ylim([0,1])
+ax.set_ylabel('Change prob')
+ax.legend(loc='upper right')
+plt.tight_layout()
+
+
+#
+regions = ('VISall',)
+
+baseWin = slice(680,750)
+respWin = slice(30,100)
+
+psthBinSize = 5
+psthTime = np.arange(0,750,psthBinSize)/1000
+psth = {region: {chLbl: {novLbl: [] for novLbl in ('familiar','novel')} for chLbl in ('change','pre-change')} for region in regions}
+psthUnitId = {region: [] for region in regions}
+for sessionInd,sessionId in enumerate(novelSessionIds):
+    print(sessionInd)
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    spikes = unitData[str(sessionId)]['spikes']
+
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+    preChangeFlashes = np.concatenate((changeFlashes[1:],[False]))
+    
+    for region in regions:
+        inRegion = getUnitsInRegion(units,region,rs=True)
+        if not any(inRegion):
+            continue
+                
+        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(inRegion)[0]):
+            sp[i]=spikes[u,:,:]
+            
+        changeSp = sp[:,changeFlashes,:]
+        preChangeSp = sp[:,preChangeFlashes,:]
+        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        nUnits = hasResp.sum()
+        if nUnits > 0:
+            for i,chLbl in zip((changeFlashes,preChangeFlashes),('change','pre-change')):
+                for j,novLbl in zip((~novelFlashes,novelFlashes),('familiar','novel')):
+                    ind = i & j
+                    nTrials = ind.sum()
+                    r = sp[hasResp][:,ind].reshape(nUnits,nTrials,-1,psthBinSize).mean(axis=-1)
+                    psth[region][chLbl][novLbl].append(r.mean(axis=1))
+            psthUnitId[region].append(np.array(units.index[inRegion][hasResp]))
+
+famInd = {}
+for chLbl in ('change','pre-change'):
+    fam,nov = [(np.concatenate(psth[region][chLbl][novLbl]) - np.concatenate(psth[region][chLbl][novLbl])[:,psthTime<=0.025].mean(axis=1)[:,None])[:,psthTime<=0.1].mean(axis=1) for novLbl in ('familiar','novel')]
+    fi = (fam-nov)/(fam+nov)
+    fi[fi<-1] = -1
+    fi[fi>1] = 1
+    famInd[chLbl] = (fi+1)/2
+    
+            
+for region in regions:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for chLbl,ls in zip(('change','pre-change'),('-','--')):
+        for novLbl,clr in zip(('familiar','novel'),'gm'):
+            d = np.concatenate(psth[region][chLbl][novLbl])*1000
+            #d *= famInd['change'][:,None]
+            m = np.nanmean(d,axis=0)
+            s = np.nanstd(d)/(len(d)**0.5)
+            ax.plot(psthTime,m,color=clr,ls=ls,label=chLbl+', '+novLbl)
+            ax.fill_between(psthTime,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,0.15])
+    ax.set_xlabel('Time from flash onset (s)')
+    ax.set_ylabel('Spikes/s')
+    ax.legend(loc='upper right')
+    ax.set_title(region + ' (n='+str(len(d))+')')
+    plt.tight_layout()
+
+
 
 
 # number of flashes and licks
@@ -145,7 +282,7 @@ for key in ('avgframe','motMask'):
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
 facemapLickDecoding = []
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapLickDecoding','unbalanced','facemapLickDecoding_*.npy'))):
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
@@ -176,7 +313,7 @@ decodeWindowSampleSize = 20
 
 unitLickDecoding = {region: [] for region in regions}
 lickDecodingSampleSize = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','old','unitLickDecoding_*.npy'))):
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
@@ -212,6 +349,33 @@ plt.tight_layout()
 
 fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
+timeToDecode = {region: [] for region in regions}
+thresh = 0.55
+n = []
+for x,region in enumerate(regions):
+    if len(unitLickDecoding[region])>0:
+        for d in unitLickDecoding[region]:
+            i = np.where(np.interp(np.arange(750)/1000,unitDecodingTime,d) > thresh)[0]
+            if len(i) > 0:
+                timeToDecode[region].append(i[0])
+            else:
+                timeToDecode[region].append(np.nan)
+    m = np.nanmean(timeToDecode[region])
+    n.append(np.sum(~np.isnan(timeToDecode[region])))
+    s = np.nanstd(timeToDecode[region])/(n[-1]**0.5)
+    ax.plot(x,m,'ko')
+    ax.plot([x,x],[m-s,m+s],'k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(np.arange(len(regions)))
+ax.set_xticklabels([r+' ('+str(b)+')' for r,b in zip(regions,n)],rotation=45)
+ax.set_ylim([0,405])
+ax.set_ylabel('Time to 55% decoding accuracy (ms)')
+plt.tight_layout()
+
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
 for region,clr in zip(regions,regionColors):
     if len(lickDecodingSampleSize[region])>0:
         m = np.nanmean(lickDecodingSampleSize[region],axis=0)
@@ -233,7 +397,7 @@ plt.tight_layout()
 unitChangeDecoding = {region: [] for region in regions}
 changeDecodingSampleSize = {region: [] for region in regions}
 changeDecodingCorr = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','old','unitChangeDecoding_*.npy'))):
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     hit = d['hit']
@@ -271,6 +435,33 @@ ax.set_ylim([0.45,1])
 ax.set_xlabel('Time from change (s)')
 ax.set_ylabel('Change decoding accuracy')
 ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
+plt.tight_layout()
+
+fig = plt.figure(figsize=(8,5))
+ax = fig.add_subplot(1,1,1)
+timeToDecode = {region: [] for region in regions}
+thresh = 0.55
+n = []
+for x,region in enumerate(regions):
+    if len(unitChangeDecoding[region])>0:
+        for d in unitChangeDecoding[region]:
+            i = np.where(np.interp(np.arange(750)/1000,unitDecodingTime,d) > thresh)[0]
+            if len(i) > 0:
+                timeToDecode[region].append(i[0])
+            else:
+                timeToDecode[region].append(np.nan)
+    m = np.nanmean(timeToDecode[region])
+    n.append(np.sum(~np.isnan(timeToDecode[region])))
+    s = np.nanstd(timeToDecode[region])/(n[-1]**0.5)
+    ax.plot(x,m,'ko')
+    ax.plot([x,x],[m-s,m+s],'k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(np.arange(len(regions)))
+ax.set_xticklabels([r+' ('+str(b)+')' for r,b in zip(regions,n)],rotation=45)
+ax.set_ylim([0,100])
+ax.set_ylabel('Time to 55% decoding accuracy (ms)')
 plt.tight_layout()
 
 fig = plt.figure(figsize=(8,5))
@@ -382,13 +573,14 @@ mbPsth = {lbl: np.concatenate(psth['SC'][lbl]+psth['MRN'][lbl]) for lbl in psth[
 clustData = mbPsth['change'].copy()
 clustData -= clustData[:,:int(10/psthBinSize)].mean(axis=1)[:,None]
 clustData /= clustData.max(axis=1)[:,None]
-clustId,linkageMat = cluster(clustData,nClusters=2,plot=False,colors=None,labels='off',xmax=10.5,nreps=0,title=None)
+nClust = 2
+clustId,linkageMat = cluster(clustData,nClusters=nClust,plot=True,colors=None,labels='off',xmax=10.5,nreps=0,title=None)
 clustUnitId = np.concatenate(psthUnitId['SC']+psthUnitId['MRN'])
 
 # np.save(os.path.join(outputDir,'sc_mrn_clusterId.npy'),clustId)
 # np.save(os.path.join(outputDir,'sc_mrn_clusterUnitId.npy'),clustUnitId)
 
-for clust in (1,2):
+for clust in np.arange(nClust)+1:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     for lbl,clr in zip(list(mbPsth.keys())[1:],'grbk'):
@@ -418,14 +610,14 @@ fig = plt.figure(figsize=(10,6))
 ax = fig.add_subplot(1,1,1)
 include = (0,1,2,3,4,5,6,7)
 for i,(d,t,clr,lbl) in enumerate(zip((np.concatenate(psth['VISp']['change']),unitChangeDecoding['VISp'],optoEffect,
-                                      mbPsth['change'][clustId==1],mbPsth['change'][clustId==2],unitLickDecoding['SC/MRN cluster 1'],
+                                      mbPsth['change'][clustId==1],unitLickDecoding['SC/MRN cluster 1'],
                                       facemapLickDecoding,cumProbLick),
                                      (psthTime,unitDecodingTime,optoTime,
-                                      psthTime,psthTime,unitDecodingTime,
+                                      psthTime,unitDecodingTime,
                                       facemapDecodingTime,lickLatTime),
-                                     ('0.5','r','k','c','m','b','g','k'),
+                                     ('0.5','r','k','c','b','g','k'),
                                      ('V1 spike rate','V1 change decoding','Behavioral effect of V1 silencing',
-                                      'SC/MRN spike rate (cluster 1)','SC/MRN spike rate (cluster 2)','SC/MRN cluster 1 lick decoding',
+                                      'SC/MRN spike rate (cluster 1)','SC/MRN cluster 1 lick decoding',
                                       'Face motion lick decoding','Lick probability'))):
     if i not in include:
         ax.plot(np.nan,np.nan,color=clr,label=' '*36)
@@ -456,11 +648,11 @@ plt.tight_layout()
 
 # integrator model
 filePaths = glob.glob(os.path.join(outputDir,'integratorModel','integratorModel_*.hdf5'))
-regions = ('VISall','VISall cluster 1','VISall cluster 2')
+regions = ('VISall',)
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-modelLabels = ('change',)
+modelLabels = ('all','change')
 decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
 
 respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
@@ -473,6 +665,9 @@ respModel = {region: {flashes: {imgLbl: {modLbl: [] for modLbl in modelLabels} f
 respTimeModel = copy.deepcopy(respModel)
 threshold = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
 leak = copy.deepcopy(threshold)
+wTiming = copy.deepcopy(threshold)
+wNovel = copy.deepcopy(threshold)
+sigma = copy.deepcopy(threshold)
 tauA = copy.deepcopy(threshold)
 tauI = copy.deepcopy(threshold)
 alphaI = copy.deepcopy(threshold)
@@ -490,10 +685,10 @@ for i,f in enumerate(filePaths):
             t = np.arange(0,tEnd,binSize)
             thresholdRange = d['thresholdRange'][()]
             leakRange = d['leakRange'][()]
+            sigmaRange = d['sigmaRange'][()]
             tauARange = d['tauARange'][()]
             tauIRange = d['tauIRange'][()]
             alphaIRange = d['alphaIRange'][()]
-            sigmaRange = d['sigmaRange'][()]
         novel = d['novel'][()]
         for j,region in enumerate(regions):
             if len(d[region]) > 0:
@@ -501,8 +696,8 @@ for i,f in enumerate(filePaths):
                 for mod in modelLabels:
                     trainAccuracy[region][mod].append(d[region]['integratorTrainAccuracy'][mod][()])
                     trainRespTime[region][mod].append(d[region]['integratorTrainRespTime'][mod][()])
-                    if mod=='hit':
-                        shuffledAccuracy[region][mod].append(d[region]['integratorShuffledAccuracy'][mod][()])
+                    # if mod=='hit':
+                    #     shuffledAccuracy[region][mod].append(d[region]['integratorShuffledAccuracy'][mod][()])
                 for decoder in decoderLabels:
                     decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 intgInput = d[region]['integratorInput'][()]
@@ -531,6 +726,9 @@ for i,f in enumerate(filePaths):
                             if k==0:
                                 threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
                                 leak[region][lbl][mod].append(d[region]['leak'][mod][()])
+                                wTiming[region][lbl][mod].append(d[region]['wTiming'][mod][()])
+                                wNovel[region][lbl][mod].append(d[region]['wNovel'][mod][()])
+                                sigma[region][lbl][mod].append(d[region]['sigma'][mod][()])
                                 tauA[region][lbl][mod].append(d[region]['tauA'][mod][()])
                                 tauI[region][lbl][mod].append(d[region]['tauI'][mod][()])
                                 alphaI[region][lbl][mod].append(d[region]['alphaI'][mod][()])
@@ -639,8 +837,39 @@ ax.set_title('Mice')
 ax.legend()
 plt.tight_layout()
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
+    mean = []
+    sem = []
+    for flashes in lbls:
+        d = []
+        for r,c,nc in zip(respTimeMice[flashes][lbl],respTimeMice['change']['all'],respTimeMice['nonChange']['all']):
+            m = np.nanmean(np.concatenate((c,nc)))
+            s = np.nanstd(np.concatenate((c,nc)))
+            d.append(np.nanmean((r-m)/s))
+        mean.append(np.nanmean(d))
+        sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
+    ax.plot(xticks,mean,'o',color=clr,ms=10,label=lbl)
+    for x,m,s in zip(xticks,mean,sem):
+        ax.plot([x,x],[m-s,m+s],color=clr)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(xticks)
+ax.set_xticklabels(lbls)
+ax.set_xlim([xticks[0]-0.25,xticks[-1]+0.25])
+# ax.set_ylim([350,500])
+ax.set_ylabel('Response time (ms)')
+ax.set_title('Mice')
+ax.legend()
+plt.tight_layout()
+
 
 # plot model response rate and decision time
+lbls = ('change','catch','nonChange','prevOmitted')
+mod = 'all'
+
 fig = plt.figure()
 xticks = np.arange(len(lbls))
 ax = fig.add_subplot(1,1,1)
@@ -648,7 +877,7 @@ for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
     for flashes in lbls:
-        d = [r.sum()/r.size for r in respModel[region][flashes][lbl]['change']]
+        d = [r.sum()/r.size for r in respModel[region][flashes][lbl][mod]]
         mean.append(np.nanmean(d))
         sem.append(np.nanstd(d)/(np.sum(~np.isnan(d))**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
@@ -673,7 +902,7 @@ for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
     mean = []
     sem = []
     for flashes in lbls:
-        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl]['change']]
+        d = [np.nanmean(r) for r in respTimeModel[region][flashes][lbl][mod]]
         mean.append(np.nanmean(d))
         sem.append(np.nanstd(d)/(len(d)**0.5))
     ax.plot(xticks,mean,'o',color=clr,ms=8,label=lbl)
