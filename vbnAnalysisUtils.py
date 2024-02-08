@@ -128,6 +128,7 @@ def getTrainTestSplits(y,nSplits,hasClasses=True):
     # cross validation using stratified shuffle split
     # each split preserves the percentage of samples of each class
     # all samples used in one test set
+    # NaNs in y are place holders to preserve indexing and otherwise ignored
 
     notNan = ~np.isnan(y)
     if hasClasses:
@@ -273,29 +274,27 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulatorBrute(accumulatorInput,pChange,novelFlashes,y,thresholdRange,leakRange,wTimingRange):
-    accuracy = np.full((len(thresholdRange),len(leakRange),len(wTimingRange)),np.nan)
+def fitAccumulatorBrute(accumulatorInput,pChange,novelFlashes,y,thresholdRange,leakRange):
+    accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
     respTime = accuracy.copy()
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
-            for k,wTiming in enumerate(wTimingRange):
-                resp,rt = runAccumulator(accumulatorInput,pChange,novelFlashes,thresh,leak,wTiming)[:2]
-                accuracy[i,j,k] = sklearn.metrics.accuracy_score(y,resp)
-                respTime[i,j,k] = np.nanmean(rt)                  
+            resp,rt = runAccumulator(accumulatorInput,pChange,novelFlashes,thresh,leak)[:2]
+            accuracy[i,j] = sklearn.metrics.accuracy_score(y,resp)
+            respTime[i,j] = np.nanmean(rt)                  
     # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
     # leakFit = leakRange[j]
     # thresholdFit = thresholdRange[i]
-    i,j,k = np.where(accuracy==accuracy.max())
-    s = np.stack((i,j,k))
+    i,j = np.where(accuracy==accuracy.max())
+    s = np.stack((i,j))
     s = np.argmin(np.sum((s - np.mean(s,axis=1)[:,None])**2,axis=0)**0.5)
     thresholdFit = thresholdRange[i[s]]
     leakFit = leakRange[j[s]]
-    wTimingFit = wTimingRange[k[s]]
-    return thresholdFit,leakFit,wTimingFit,accuracy,respTime
+    return thresholdFit,leakFit,accuracy,respTime
 
 
-def fitAccumulator(accumulatorInput,pChange,novelFlashes,y,thresholdRange,leakRange,wTimingRange,sigmaRange):
-    bounds = (thresholdRange,leakRange,wTimingRange,sigmaRange)
+def fitAccumulator(accumulatorInput,pChange,novelFlashes,y,thresholdRange,leakRange,sigmaRange):
+    bounds = (thresholdRange,leakRange,sigmaRange)
     fit = scipy.optimize.direct(evalAccumulator,bounds,args=(accumulatorInput,pChange,novelFlashes,y))
     params = fit.x
     logLoss = fit.fun
@@ -309,7 +308,7 @@ def evalAccumulator(params,*args):
     return logLoss
 
 
-def runAccumulator(accumulatorInput,pChange,novelFlashes,threshold,leak,wTiming=0,wNovel=0,sigma=0,tauA=1,tauI=0,alphaI=0,nReps=20,recordValues=False):
+def runAccumulator(accumulatorInput,pChange,novelFlashes,threshold,leak,sigma=0,wTiming=0,wNovel=0,tauA=1,tauI=0,alphaI=0,nReps=20,recordValues=False):
     nReps = nReps if sigma > 0 else 1
     nTrials = len(accumulatorInput)
     resp = np.zeros((nReps,nTrials),dtype=bool)

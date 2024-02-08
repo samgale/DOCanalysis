@@ -146,7 +146,7 @@ def decodeLicksFromUnits(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
-    decodeWindowSampleSize = 10
+    decodeWindowSampleSize = 20
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
@@ -218,7 +218,7 @@ def decodeLicksFromUnits(sessionId):
                     d[region][sampleSize]['confidence'][-1].append(cv['decision_function'])
                 for metric in d[region][sampleSize]:
                     if metric == 'prediction':
-                        d[region][sampleSize][metric][-1] = scipy.stats.mode(d[region][sampleSize][metric][-1],axis=0)[0][0]
+                        d[region][sampleSize][metric][-1] = np.mean(d[region][sampleSize][metric][-1],axis=0)
                     else:
                         d[region][sampleSize][metric][-1] = np.median(d[region][sampleSize][metric][-1],axis=0)
     warnings.filterwarnings('default')
@@ -230,6 +230,7 @@ def decodeChange(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
+    decodeWindowSampleSize = 20
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
@@ -246,14 +247,47 @@ def decodeChange(sessionId):
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+    preChangeFlashes = np.concatenate((changeFlashes[1:],[False]))
+    nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
-    
+    lickLatency = lickTimes - flashTimes
+    imageName = np.array(stim['image_name'])
+
+    outcome = []
+    for lbl in ('hit','miss','false_alarm','correct_reject'):
+        a = stim[lbl].copy()
+        a[a.isnull()] = False
+        outcome.append(np.array(a).astype(bool))
+    hit,miss,falseAlarm,correctReject = outcome
+    hit = hit & changeFlashes
+    miss = miss & changeFlashes
+    falseAlarm = falseAlarm & catchFlashes
+    correctReject = correctReject & catchFlashes
+
     d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','prediction','confidence')}
          for sampleSize in unitSampleSize} for region in regions}
+    d['unitSampleSize'] = unitSampleSize
     d['decodeWindows'] = decodeWindows
-    d['hit'] = np.array(stim['hit'])[changeFlashes]
-    y = np.zeros(nChange*2)
-    y[:nChange] = 1
+    d['imageName'] = imageName
+    d['change'] = changeFlashes
+    d['preChange'] = preChangeFlashes
+    d['catch'] = catchFlashes
+    d['nonChange'] = nonChangeFlashes
+    d['omitted'] = omittedFlashes
+    d['prevOmitted'] = prevOmittedFlashes
+    d['novel'] = novelFlashes
+    d['lick'] = lick
+    d['lickLatency'] = lickLatency
+    d['hit'] = hit
+    d['miss'] = miss
+    d['falseAlarm'] = falseAlarm
+    d['correctReject'] = correctReject
+
+    y = np.full(nFlash,np.nan)
+    y[changeFlashes] = 1
+    y[preChangeFlashes] = 0
+    yind = ~np.isnan(y)
+    
     warnings.filterwarnings('ignore')
     for region in regions:
         inRegion = getUnitsInRegion(units,region)
@@ -268,10 +302,8 @@ def decodeChange(sessionId):
         preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
         hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
         nUnits = hasResp.sum()
-
-        changeSp,preChangeSp = [s[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nChange,len(decodeWindows),decodeWindowSize)).sum(axis=-1) for s in (changeSp,preChangeSp)]
+        flashSp = sp[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nFlash,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
         
-        decodeWindowSampleSize = 10 if region=='SC/MRN cluster 1' else 20
         for sampleSize in unitSampleSize:
             if nUnits < sampleSize:
                 continue
@@ -291,21 +323,59 @@ def decodeChange(sessionId):
                 if sampleSize!=decodeWindowSampleSize and winEnd!=decodeWindows[-1]:
                     continue
                 winEnd = int(winEnd/decodeWindowSize)
+
                 for metric in d[region][sampleSize]:
                     d[region][sampleSize][metric].append([])
+
                 for unitSamp in unitSamples:
-                    X = np.concatenate([s[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nChange,-1)) for s in (changeSp,preChangeSp)])                       
-                    cv = trainDecoder(model,X,y,nCrossVal)
-                    d[region][sampleSize]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
-                    d[region][sampleSize]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
-                    d[region][sampleSize]['accuracy'][-1].append(np.mean(cv['test_score']))
-                    d[region][sampleSize]['prediction'][-1].append(cv['predict'])
-                    d[region][sampleSize]['confidence'][-1].append(cv['decision_function'])
-                for metric in d[region][sampleSize]:
-                    if metric == 'prediction':
-                        d[region][sampleSize][metric][-1] = scipy.stats.mode(d[region][sampleSize][metric][-1],axis=0)[0][0]
+                    # get train/test sets from change and pre-change flashes
+                    if np.any(novelFlashes):
+                        # balance novel and familiar changes
+                        train = []
+                        test = []
+                        for i in (novelFlashes,~novelFlashes):
+                            j = np.where(changeFlashes & i)[0]
+                            j = np.concatenate((j,j-1))
+                            k = y.copy()
+                            k[j] = np.nan
+                            tr,ts = getTrainTestSplits(k,nCrossVal)
+                            train.append(tr)
+                            test.append(ts)
+                        trainInd = [list(i)+list(j) for i,j in zip(*train)]
+                        testInd = [list(i)+list(j) for i,j in zip(*test)]
                     else:
-                        d[region][sampleSize][metric][-1] = np.median(d[region][sampleSize][metric][-1],axis=0)
+                        trainInd,testInd = getTrainTestSplits(y,nCrossVal)
+                    # use all change/pre-change as training set for all other flashes
+                    trainInd.append(np.where(~np.isnan(y))[0])
+                    testInd.append(np.where(np.isnan(y))[0])
+
+                    X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nFlash,-1))       
+                    trainAccuracy = np.zeros(nCrossVal+1)
+                    featureWeights = np.zeros((nCrossVal+1,X.shape[1]))
+                    accuracy = np.zeros(nCrossVal)
+                    prediction = np.zeros(nFlash)
+                    confidence = np.zeros(nFlash)
+                    for k,(train,test) in enumerate(zip(trainInd,testInd)):
+                        decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
+                        decoder.fit(X[train],y[train])
+                        trainAccuracy[k] = decoder.score(X[train],y[train])
+                        featureWeights[k] = np.squeeze(decoder.coef_)
+                        if k < nCrossVal:
+                            accuracy[k] = decoder.score(X[test],y[test])
+                        prediction[test] = decoder.predict(X[test])
+                        confidence[test] = decoder.decision_function(X[test])
+                    d[region][sampleSize]['trainAccuracy'][-1].append(trainAccuracy[-1])
+                    d[region][sampleSize]['featureWeights'][-1].append(featureWeights[-1])
+                    d[region][sampleSize]['accuracy'][-1].append(np.mean(accuracy))
+                    d[region][sampleSize]['prediction'][-1].append(prediction)
+                    d[region][sampleSize]['confidence'][-1].append(confidence)
+
+                # take median of decoding metrics across unit samples 
+                d[region][sampleSize]['trainAccuracy'][-1] = np.median(d[region][sampleSize]['trainAccuracy'][-1])
+                d[region][sampleSize]['featureWeights'][-1] = np.median(d[region][sampleSize]['featureWeights'][-1],axis=(0,1))
+                d[region][sampleSize]['accuracy'][-1] = np.median(d[region][sampleSize]['accuracy'][-1],axis=0)
+                d[region][sampleSize]['prediction'][-1] = np.mean(d[region][sampleSize]['prediction'][-1],axis=0)
+                d[region][sampleSize]['confidence'][-1] = np.median(d[region][sampleSize]['confidence'][-1],axis=0)
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_'+str(sessionId)+'.npy'),d)
@@ -314,8 +384,8 @@ def decodeChange(sessionId):
 def fitIntegratorModel(sessionId):
     regions = ('VISall',)
     layer = None
-    weighted = False
-    bruteFit = True
+    weighted = True
+    bruteFit = False
     nCrossVal = 5
     nShuffles = 1
     minUnits = 20
@@ -324,11 +394,11 @@ def fitIntegratorModel(sessionId):
     tEnd = 150
     binSize = 1
     nBins = int(tEnd/binSize)
-    thresholdRange = np.arange(1,25,1)
-    leakRange = np.arange(0.01,0.25,0.01)
-    wTimingRange = np.arange(0,1,0.05)
+    thresholdRange = (0,15) #np.arange(1,25,1)
+    leakRange = (0,0.25) #np.arange(0.01,0.25,0.01)
+    wTimingRange = np.array([0])
     wNovelRange = np.array([0])
-    sigmaRange = np.array([0]) #np.arange(0,1.1,0.2)
+    sigmaRange = (0,1.5) #np.array([0]) #np.arange(0,1.1,0.2)
     tauARange = np.array([0])#(1,150) # np.arange(5,50,5)
     tauIRange = np.array([0])#(1,150) # np.arange(5,100,10)
     alphaIRange = np.array([0])#(0.01,1) # np.arange(0.05,0.5,0.05)
@@ -393,7 +463,9 @@ def fitIntegratorModel(sessionId):
     y = {}
     trainInd = {}
     testInd = {}
-    for go,nogo,lbl in zip((changeFlashes,hit,(changeFlashes | nonChangeFlashes) & lick),(preChangeFlashes,miss,(changeFlashes | nonChangeFlashes) & ~lick),('change','hit','all')):
+    for go,nogo,lbl in zip((changeFlashes,hit | falseAlarm,(changeFlashes | catchFlashes | nonChangeFlashes) & lick),
+                           (preChangeFlashes,miss | correctReject,(changeFlashes | catchFlashes | nonChangeFlashes) & ~lick),
+                           ('change','hit','all')):
         y[lbl] = np.full(nFlash,np.nan)
         y[lbl][go] = 1
         y[lbl][nogo] = 0
@@ -469,7 +541,11 @@ def fitIntegratorModel(sessionId):
             d[region]['decoderConfidence'][lbl] = decoderConfidence
 
         if weighted:
-            w = d[region]['decoderWeights']['allUnitSpikeCount'].mean(axis=0)
+            fam = sp[:,changeFlashes & ~novelFlashes].mean(axis=(1,2))
+            nov = sp[:,changeFlashes & novelFlashes].mean(axis=(1,2))
+            w = np.clip((fam - nov) / (fam + nov),-1,1)
+            w += 1
+            w /= 2
             sp *= w[:,None,None]
         flashSp = sp.mean(axis=0)
         inputNorm = flashSp.max()
@@ -491,7 +567,7 @@ def fitIntegratorModel(sessionId):
         d[region]['integratorResp'] = {}
         d[region]['integratorRespTime'] = {}
         d[region]['integratorShuffledAccuracy'] = {}
-        for lbl in ('all','change'):
+        for lbl in ('hit','all'):
             thresholdFit = np.full(nCrossVal+1,np.nan)
             leakFit = thresholdFit.copy()
             wTimingFit = thresholdFit.copy()
@@ -501,17 +577,17 @@ def fitIntegratorModel(sessionId):
             tauIFit = thresholdFit.copy()
             alphaIFit = thresholdFit.copy()
             integratorTrainLogLoss = thresholdFit.copy()
-            integratorTrainAccuracy = np.full((nCrossVal+1,len(thresholdRange),len(leakRange),len(wTimingRange)),np.nan)
+            integratorTrainAccuracy = np.full((nCrossVal+1,len(thresholdRange),len(leakRange)),np.nan)
             integratorTrainRespTime = integratorTrainAccuracy.copy()
             integratorResp = np.full(nFlash,np.nan)
             integratorRespTime = integratorResp.copy()
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
                 if bruteFit:
-                    thresholdFit[k],leakFit[k],wTimingFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,wTimingRange)
-                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],thresholdFit[k],leakFit[k],wTimingFit[k])[:2]
+                    thresholdFit[k],leakFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange)
+                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],thresholdFit[k],leakFit[k])[:2]
                 else:
-                    params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,wTimingRange,sigmaRange)
-                    thresholdFit[k],leakFit[k],wTimingFit[k],sigmaFit[k] = params
+                    params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,sigmaRange)
+                    thresholdFit[k],leakFit[k],sigmaFit[k] = params
                     integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],*params)[:2]
             d[region]['threshold'][lbl] = thresholdFit
             d[region]['leak'][lbl] = leakFit
@@ -550,5 +626,5 @@ if __name__ == "__main__":
     #runFacemap(sessionId)
     #decodeLicksFromFacemap(sessionId)
     #decodeLicksFromUnits(sessionId)
-    #decodeChange(sessionId)
-    fitIntegratorModel(sessionId)
+    decodeChange(sessionId)
+    #fitIntegratorModel(sessionId)

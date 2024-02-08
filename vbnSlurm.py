@@ -23,12 +23,12 @@ slurm = Slurm(cpus_per_task=1,
               partition='braintv',
               job_name='vbnFacemap',
               output=f'{stdout_location}/{Slurm.JOB_ARRAY_MASTER_ID}_{Slurm.JOB_ARRAY_ID}.out',
-              time='16:00:00',
+              time='24:00:00',
               mem_per_cpu='8gb')
 
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 sessionIds = stimTable['session_id'].unique()
-#sessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
+# sessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
 for sessionId in sessionIds:
     slurm.sbatch('{} {} --sessionId {}'.format(python_path,script_path,sessionId))
