@@ -296,6 +296,7 @@ ax.fill_between(facemapDecodingTime,m+s,m-s,color='g',alpha=0.25)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
 ax.set_ylim([0.45,1])
 ax.set_xlabel('Time from non-change flash onset (ms)')
 ax.set_ylabel('Lick decoding balanced accuracy')
@@ -396,30 +397,58 @@ plt.tight_layout()
 # unit change decoding
 unitChangeDecoding = {region: [] for region in regions}
 changeDecodingSampleSize = {region: [] for region in regions}
-changeDecodingCorr = {region: [] for region in regions}
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
-    print(i)
+
+imageTypes = {'change','preChange','catch','nonChange','prevOmitted'}
+respRateMouse = {imgType: [] for imgType in imageTypes}
+respRate = {region: {imgType: [] for imgType in imageTypes} for region in regions}
+
+images = {'G': ['im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'],
+          'H': ['im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r']}
+respMatMouse = {imgSet: {famNov: np.zeros((8,8)) for famNov in ('familiar','novel')} for imgSet in ('G','H')}
+respMatMouseCount = copy.deepcopy(respMatMouse)
+respMat = {region: copy.deepcopy(respMatMouse) for region in regions}
+respMatCount = copy.deepcopy(respMat)
+
+for n,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
+    print(n)
     d = np.load(f,allow_pickle=True).item()
     hit = d['hit']
     if hit.sum() >= 10:
+        for imgType in imageTypes:
+            respRateMouse[imgType].append(np.sum(d['lick'][d[imgType]]) / np.sum(d[imgType]))
+        
+        imgSet = 'G' if np.all(np.in1d(d['imageName'][d['change']],images['G'])) else 'H'
+        famNov = 'novel' if np.any(d['novel']) else 'familiar'
+        c = np.where(d['change'] | d['catch'])[0]
+        for i,preImg in enumerate(images[imgSet]):
+            for j,chImg in enumerate(images[imgSet]):
+                k = (d['imageName'][c-1]==preImg) & (d['imageName'][c]==chImg)
+                respMatMouse[imgSet][famNov][i,j] += np.sum(d['lick'][c][k])
+                respMatMouseCount[imgSet][famNov][i,j] += np.sum(k)
+        
         for region in regions:
-            decodeWindowSampleSize = 20 if region=='SC/MRN cluster 1' else 20
             a = d[region][decodeWindowSampleSize]['accuracy']
-            if len(a)>0:
+            if len(a) > 0:
                 unitChangeDecoding[region].append(a)
                 
             changeDecodingSampleSize[region].append([])
-            for sampleSize in unitSampleSize:
+            for sampleSize in d['unitSampleSize']:
                 a = d[region][sampleSize]['accuracy']
                 if len(a) > 0:
-                    changeDecodingSampleSize[region][-1].append(a[-1])
+                    changeDecodingSampleSize[region][-1].append(a)
                 else:
                     changeDecodingSampleSize[region][-1].append(np.nan)
             
-            if hit.sum() < hit.size:
-                conf = d[region][decodeWindowSampleSize]['confidence']
-                if len(conf)>0:
-                    changeDecodingCorr[region].append([np.corrcoef(hit,c[:hit.size])[0,1] for c in conf])
+            p = d[region][decodeWindowSampleSize]['prediction']
+            if len(p) > 0:
+                for imgType in imageTypes:
+                    respRate[region][imgType].append(np.mean(np.array(p)[:,d[imgType]],axis=1))
+                        
+                for i,preImg in enumerate(images[imgSet]):
+                    for j,chImg in enumerate(images[imgSet]):
+                        k = (d['imageName'][c-1]==preImg) & (d['imageName'][c]==chImg)
+                        respMat[region][imgSet][famNov][i,j] += np.sum(d[region][decodeWindowSampleSize]['prediction'][14][c][k])
+                        respMatCount[region][imgSet][famNov][i,j] += np.sum(k)
 
 fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
@@ -482,21 +511,24 @@ ax.set_ylabel('Change decoding accuracy')
 ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
-fig = plt.figure(figsize=(8,5))
-ax = fig.add_subplot(1,1,1)
-for region,clr in zip(regions,regionColors):
-    if len(changeDecodingCorr[region])>0:
-        m = np.mean(changeDecodingCorr[region],axis=0)
-        s = np.std(changeDecodingCorr[region],axis=0)/(len(changeDecodingCorr[region])**0.5)
-        ax.plot(unitDecodingTime,m,color=clr,label=region+' (n='+str(len(changeDecodingCorr[region]))+')')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_ylim([-0.1,1])
-ax.set_xlabel('Time from change (s)')
-ax.set_ylabel('Change decoder correlation with behavior')
-ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
-plt.tight_layout()
+
+    
+for imgSet in ('G','H'):
+    for famNov in ('familiar','novel'):
+        fig = plt.figure()
+        fig.suptitle('image set '+imgSet+', '+famNov+' n='+str(len(respMatMouse[imgSet][famNov]))+' sessions')
+        for i,(r,c) in enumerate(zip((respMatMouse,respMat['VISam']),(respMatMouseCount,respMatCount['VISam']))):
+            ax = fig.add_subplot(2,1,i+1)
+            m = r[imgSet][famNov] / c[imgSet][famNov]
+            im = ax.imshow(m,cmap='magma',origin='lower')
+            cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_xlabel('Change image')
+            ax.set_ylabel('Pre-change image')
+        plt.tight_layout()
+
+
 
 
 # psth
@@ -652,7 +684,7 @@ regions = ('VISall',)
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-modelLabels = ('all','change')
+modelLabels = ('all','hit')
 decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
 
 respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
