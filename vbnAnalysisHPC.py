@@ -264,7 +264,7 @@ def decodeChange(sessionId):
     falseAlarm = falseAlarm & catchFlashes
     correctReject = correctReject & catchFlashes
 
-    d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','prediction','confidence')}
+    d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','accuracyFamiliar','accuracyNovel','prediction','confidence')}
          for sampleSize in unitSampleSize} for region in regions}
     d['unitSampleSize'] = unitSampleSize
     d['decodeWindows'] = decodeWindows
@@ -353,6 +353,8 @@ def decodeChange(sessionId):
                     trainAccuracy = np.zeros(nCrossVal+1)
                     featureWeights = np.zeros((nCrossVal+1,X.shape[1]))
                     accuracy = np.zeros(nCrossVal)
+                    accuracyFamiliar = np.zeros(nCrossVal)
+                    accuracyNovel = np.zeros(nCrossVal)
                     prediction = np.zeros(nFlash)
                     confidence = np.zeros(nFlash)
                     for k,(train,test) in enumerate(zip(trainInd,testInd)):
@@ -362,11 +364,18 @@ def decodeChange(sessionId):
                         featureWeights[k] = np.squeeze(decoder.coef_)
                         if k < nCrossVal:
                             accuracy[k] = decoder.score(X[test],y[test])
+                            if np.any(novelFlashes):
+                                fam = (y[test]==0) & (~novelFlashes[[i+1 for i in test]]) | ((y[test]==1) & (~novelFlashes[test]))
+                                accuracyFamiliar[k] = decoder.score(X[test][fam],y[test][fam])
+                                nov = (y[test]==0) & (novelFlashes[[i+1 for i in test]]) | ((y[test]==1) & (novelFlashes[test]))
+                                accuracyNovel[k] = decoder.score(X[test][nov],y[test][nov])
                         prediction[test] = decoder.predict(X[test])
                         confidence[test] = decoder.decision_function(X[test])
                     d[region][sampleSize]['trainAccuracy'][-1].append(trainAccuracy[-1])
                     d[region][sampleSize]['featureWeights'][-1].append(featureWeights[-1])
                     d[region][sampleSize]['accuracy'][-1].append(np.mean(accuracy))
+                    d[region][sampleSize]['accuracyFamiliar'][-1].append(np.mean(accuracyFamiliar))
+                    d[region][sampleSize]['accuracyNovel'][-1].append(np.mean(accuracyNovel))
                     d[region][sampleSize]['prediction'][-1].append(prediction)
                     d[region][sampleSize]['confidence'][-1].append(confidence)
 
@@ -374,6 +383,8 @@ def decodeChange(sessionId):
                 d[region][sampleSize]['trainAccuracy'][-1] = np.median(d[region][sampleSize]['trainAccuracy'][-1])
                 d[region][sampleSize]['featureWeights'][-1] = np.median(d[region][sampleSize]['featureWeights'][-1],axis=(0,1))
                 d[region][sampleSize]['accuracy'][-1] = np.median(d[region][sampleSize]['accuracy'][-1],axis=0)
+                d[region][sampleSize]['accuracyFamiliar'][-1] = np.median(d[region][sampleSize]['accuracyFamiliar'][-1],axis=0)
+                d[region][sampleSize]['accuracyNovel'][-1] = np.median(d[region][sampleSize]['accuracyNovel'][-1],axis=0)
                 d[region][sampleSize]['prediction'][-1] = np.mean(d[region][sampleSize]['prediction'][-1],axis=0)
                 d[region][sampleSize]['confidence'][-1] = np.median(d[region][sampleSize]['confidence'][-1],axis=0)
     warnings.filterwarnings('default')
