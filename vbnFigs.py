@@ -171,6 +171,7 @@ plt.tight_layout()
 regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
            'Hipp','APN','NOT','SC','MRN','MB',
            'SC/MRN cluster 1','SC/MRN cluster 2')
+regions = ['cluster '+str(c) for c in range(15)]
 regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
 
 unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
@@ -268,7 +269,7 @@ for region,clr in zip(regions,regionColors):
         n = np.sum(~np.isnan(lickDecodingSampleSize[region]),axis=0)
         s = np.nanstd(lickDecodingSampleSize[region],axis=0)/(n**0.5)
         i = n>2
-        ax.plot(unitSampleSize[i],m[i],color=clr,label=region+' (n='+str(len(unitLickDecoding[region]))+')')
+        ax.plot(unitSampleSize[i],m[i],color=clr,label=region)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -280,6 +281,15 @@ plt.tight_layout()
 
 
 # unit change decoding
+regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+           'Hipp','APN','NOT','SC','MRN','MB',
+           'SC/MRN cluster 1','SC/MRN cluster 2')
+regions = ['cluster '+str(c) for c in range(15)]
+regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
+
+unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
+decodeWindowSampleSize = 20
+
 unitChangeDecoding = {region: [] for region in regions}
 changeDecodingSampleSize = {region: [] for region in regions}
 
@@ -436,7 +446,7 @@ for region,clr in zip(regions,regionColors):
         n = np.sum(~np.isnan(changeDecodingSampleSize[region]),axis=0)
         s = np.nanstd(changeDecodingSampleSize[region],axis=0)/(n**0.5)
         i = n>2
-        ax.plot(unitSampleSize[i],m[i],color=clr,label=region+' (n='+str(len(unitChangeDecoding[region]))+')')
+        ax.plot(unitSampleSize[i],m[i],color=clr,label=region)
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
@@ -447,9 +457,17 @@ ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
 
-fig = plt.figure(figsize=(10,10))
+fig = plt.figure(figsize=(12,10))
+nrows = int(np.ceil(len(regions)/2))
+gs = matplotlib.gridspec.GridSpec(nrows,2)
+norm = False
 for i,region in enumerate(regions):
-    ax = fig.add_subplot(len(regions),1,i+1)
+    if i > nrows-1:
+        i -= nrows
+        j = 1
+    else:
+        j = 0
+    ax = fig.add_subplot(gs[i,j])
     for imgType,clr in zip(imageTypes,'kgm'):
         a = accuracy[region][imgType]
         if len(a) < 1:
@@ -457,23 +475,31 @@ for i,region in enumerate(regions):
         else:
             m = np.mean(a,axis=0)
             s = np.std(a,axis=0)/(len(a)**0.5)
+            if norm:
+                m -= m.min()
+                m /= m.max()
         ax.plot(unitDecodingTime,m,color=clr,label=imgType)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    if i<len(regions)-1:
+    if i==nrows-1:
+        ax.set_xlabel('Time from change')
+    else:
         ax.set_xticklabels([])
+    if j==0 and i==nrows//2:
+        ax.set_ylabel(('Normalized change decoding accuracy' if norm else 'Change decoding accuracy'))
     ax.set_xlim([0,0.75])
-    ax.set_ylim([0.45,1])
-    ax.set_ylabel(region,rotation=0,ha='right')
-    if i==0:
+    ax.set_ylim(([0,1] if norm else [0.45,1]))
+    ax.set_title(region)
+    if i==0 and j==1:
         ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
 plt.tight_layout()
 
 
-fig = plt.figure(figsize=(10,10))
-gs = matplotlib.gridspec.GridSpec(len(regions),4)
-for i,region in enumerate(regions):
+fig = plt.figure(figsize=(14,10))
+nrows = int(np.ceil(len(regions)/2))
+gs = matplotlib.gridspec.GridSpec(nrows,4)
+for i,region in enumerate(regions[:nrows]):
     for j,flashType in enumerate(flashTypes):
         ax = fig.add_subplot(gs[i,j])
         for imgType,clr in zip(imageTypes,'kgm'):
@@ -489,13 +515,20 @@ for i,region in enumerate(regions):
         ax.tick_params(direction='out',top=False,right=False)
         if j>0:
             ax.set_yticklabels([])
-        if i<len(regions)-1:
+        if i<nrows-1:
             ax.set_xticklabels([])
         ax.set_xlim([0,0.75])
         ax.set_ylim([-0.2,1])
+        if i==nrows-1 and j==0:
+            ax.set_xlabel('Time from change')
+        if j==0 and i==nrows//2:
+            ax.set_ylabel('Corrected decoder response rate')
         if j==0:
-            ax.set_ylabel(region,rotation=0,ha='right')
-        if i==0:
+            if i==0:
+                ax.set_title(flashType+'\n'+region)
+            else:
+                ax.set_title(region)
+        elif i==0:
             ax.set_title(flashType)
         if i==0 and j==len(flashTypes)-1:
             ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
@@ -503,20 +536,29 @@ plt.tight_layout()
 
 
 fig = plt.figure(figsize=(8,10))
-fig.suptitle('Correlation of mouse and decoder response matric (r^2)')
+fig.suptitle('Correlation of mouse and decoder image response matrix')
 a = 0
+notDiag = ~(np.eye(8).flatten().astype(bool))
+corrMean = {sessionType: {imgSet: np.full(len(regions),np.nan) for imgSet in 'GH'} for sessionType in ('familiar','novel')}
+corrSem = copy.deepcopy(corrMean)
+t = np.where(decodeWindows==100)[0][0]
 for sessionType in ('familiar','novel'):   
     for imgSet in ('G','H'):
         a += 1
         ax = fig.add_subplot(4,1,a)
-        r = np.full((len(regions),len(decodeWindows)),np.nan)
+        m = np.full((len(regions),len(decodeWindows)),np.nan)
+        s = m.copy()
         for i,region in enumerate(regions):
             decoder = respMat[region][sessionType][imgSet]
-            if len(d)>0:
+            if len(decoder)>0:
                 mouse = respMatMouse[region][sessionType][imgSet]
                 for j in range(len(decodeWindows)):
-                    r[i,j] = np.nanmean([np.corrcoef(m.flatten(),d[j].flatten())[0][1] for m,d in zip(mouse,decoder)])
-        im = ax.imshow(r**2,cmap='magma',clim=(0,1))
+                    d = [np.corrcoef(ms.flatten()[notDiag],dc[j].flatten()[notDiag])[0][1] for ms,dc in zip(mouse,decoder)]
+                    m[i,j] = np.nanmean(d)
+                    s[i,j] = np.nanstd(d)/(len(d)**0.5)
+        corrMean[sessionType][imgSet] = m[:,t]
+        corrSem[sessionType][imgSet] = s[:,t]
+        im = ax.imshow(m,cmap='magma',clim=(0,1))
         for side in ('right','top'):
             ax.spines[side].set_visible(False)
         ax.tick_params(direction='out',top=False,right=False)
@@ -524,7 +566,7 @@ for sessionType in ('familiar','novel'):
         ax.set_xticks(xticks)
         ax.set_xticklabels(decodeWindows[xticks])
         ax.set_yticks(np.arange(len(regions)))
-        ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=7)
+        ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
         if i==3:
             ax.set_xlabel('Time from change (s)')
         ax.set_title(sessionType+' '+imgSet)
@@ -532,10 +574,34 @@ for sessionType in ('familiar','novel'):
 plt.tight_layout()
 
 
+fig = plt.figure(figsize=(6,10))
+i = 0
+xticks = np.arange(len(regions))
+for sessionType in ('familiar','novel'):
+    for imgSet in 'GH':
+        i += 1
+        ax = plt.subplot(4,1,i)
+        ax.plot(xticks,corrMean[sessionType][imgSet],'ko')
+        for x,m,s in zip(xticks,corrMean[sessionType][imgSet],corrSem[sessionType][imgSet]):
+            ax.plot([x,x],[m-s,m+s],'k')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xticks(xticks)
+        if i<4:
+            ax.set_xticklabels([])
+        else:
+            ax.set_xticklabels(regions,rotation=90)
+        if i==1:
+            ax.set_xlabel('Correlation of mouse and decoder image response matrix')
+        ax.set_ylim([0,0.6])
+        ax.set_title(sessionType+' '+imgSet)
+plt.tight_layout()
+
+
 fig = plt.figure(figsize=(8,10))
 gs = matplotlib.gridspec.GridSpec(len(regions)+1,4)
 j = -1
-t = np.where(decodeWindows==100)[0][0]
 for sessionType in ('familiar','novel'):   
     for imgSet in ('G','H'):
         j += 1
@@ -675,14 +741,14 @@ fig = plt.figure(figsize=(10,6))
 ax = fig.add_subplot(1,1,1)
 include = (0,1,2,3,4,5,6,7)
 for i,(d,t,clr,lbl) in enumerate(zip((np.concatenate(psth['VISp']['change']),unitChangeDecoding['VISp'],optoEffect,
-                                      mbPsth['change'][clustId==1],unitLickDecoding['SC/MRN cluster 1'],
+                                      mbPsth['change'][clustId==2],unitLickDecoding['SC/MRN cluster 2'],
                                       facemapLickDecoding,cumProbLick),
                                      (psthTime,unitDecodingTime,optoTime,
                                       psthTime,unitDecodingTime,
                                       facemapDecodingTime,lickLatTime),
                                      ('0.5','r','k','c','b','g','k'),
                                      ('V1 spike rate','V1 change decoding','Behavioral effect of V1 silencing',
-                                      'SC/MRN spike rate (cluster 1)','SC/MRN cluster 1 lick decoding',
+                                      'SC/MRN spike rate (cluster 1)','SC/MRN cluster 2 lick decoding',
                                       'Face motion lick decoding','Lick probability'))):
     if i not in include:
         ax.plot(np.nan,np.nan,color=clr,label=' '*36)
