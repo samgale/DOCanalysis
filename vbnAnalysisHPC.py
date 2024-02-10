@@ -18,7 +18,7 @@ import h5py
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
-from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInRegion, findResponsiveUnits, getTrainTestSplits, trainDecoder, fitAccumulatorBrute, fitAccumulator, runAccumulator
+from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInCluster, getUnitsInRegion, findResponsiveUnits, getTrainTestSplits, trainDecoder, fitAccumulatorBrute, fitAccumulator, runAccumulator
 
 
 baseDir = pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables')
@@ -32,6 +32,8 @@ videoTable.insert(0,'session_id',[int(s[:s.find('_')]) for s in videoTable['exp_
 
 unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
+
+clusterTable = pd.read_csv(os.path.join(baseDir,'unit_cluster_labels.csv'))
 
 
 def runFacemap(sessionId):
@@ -151,9 +153,14 @@ def decodeLicksFromUnits(sessionId):
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
-    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-               'MRN','MB','SC','APN','NOT','Hipp','Sub',
-               'SC/MRN cluster 1','SC/MRN cluster 2')
+    useClusters = True
+
+    if useClusters:
+        regions = ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels'])]
+    else:    
+        regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+                   'MRN','MB','SC','APN','NOT','Hipp','Sub',
+                   'SC/MRN cluster 1','SC/MRN cluster 2')
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -166,22 +173,30 @@ def decodeLicksFromUnits(sessionId):
     
     d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
          for sampleSize in unitSampleSize} for region in regions}
+    d['regions'] = regions
     d['decodeWindows'] = decodeWindows
     d['lick'] = lick[nonChangeFlashes]
     y = lick[nonChangeFlashes]
     warnings.filterwarnings('ignore')
     for region in regions:
-        inRegion = getUnitsInRegion(units,region)
+        if useClusters:
+            clust = int(region[region.find(' ')+1:])
+            inRegion = getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clust)
+        else:
+            inRegion = getUnitsInRegion(units,region)
         if not any(inRegion):
             continue
                 
         sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
         for i,u in enumerate(np.where(inRegion)[0]):
             sp[i]=spikes[u,:,:]
-            
-        changeSp = sp[:,changeFlashes,:]
-        preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
-        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        
+        if useClusters:
+            hasResp = np.ones(inRegion.sum(),dtype=bool) 
+        else:
+            changeSp = sp[:,changeFlashes,:]
+            preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
         nUnits = hasResp.sum()
 
         flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nonChangeFlashes.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
@@ -235,9 +250,14 @@ def decodeChange(sessionId):
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
-    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-               'MRN','MB','SC','APN','NOT','Hipp','Sub',
-               'SC/MRN cluster 1','SC/MRN cluster 2')
+    useClusters = True
+
+    if useClusters:
+        regions = ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels'])]
+    else:    
+        regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+                   'MRN','MB','SC','APN','NOT','Hipp','Sub',
+                   'SC/MRN cluster 1','SC/MRN cluster 2')
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -266,6 +286,7 @@ def decodeChange(sessionId):
 
     d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','accuracyFamiliar','accuracyNovel','prediction','confidence')}
          for sampleSize in unitSampleSize} for region in regions}
+    d['regions'] = regions
     d['unitSampleSize'] = unitSampleSize
     d['decodeWindows'] = decodeWindows
     d['imageName'] = imageName
@@ -290,7 +311,11 @@ def decodeChange(sessionId):
     
     warnings.filterwarnings('ignore')
     for region in regions:
-        inRegion = getUnitsInRegion(units,region)
+        if useClusters:
+            clust = int(region[region.find(' ')+1:])
+            inRegion = getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clust)
+        else:
+            inRegion = getUnitsInRegion(units,region)
         if not any(inRegion):
             continue
                 
@@ -298,10 +323,14 @@ def decodeChange(sessionId):
         for i,u in enumerate(np.where(inRegion)[0]):
             sp[i]=spikes[u,:,:]
             
-        changeSp = sp[:,changeFlashes,:]
-        preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
-        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+        if useClusters:
+            hasResp = np.ones(inRegion.sum(),dtype=bool) 
+        else:
+            changeSp = sp[:,changeFlashes,:]
+            preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
         nUnits = hasResp.sum()
+
         flashSp = sp[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nFlash,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
         
         for sampleSize in unitSampleSize:
@@ -636,6 +665,6 @@ if __name__ == "__main__":
     sessionId = args.sessionId
     #runFacemap(sessionId)
     #decodeLicksFromFacemap(sessionId)
-    #decodeLicksFromUnits(sessionId)
+    decodeLicksFromUnits(sessionId)
     decodeChange(sessionId)
     #fitIntegratorModel(sessionId)
