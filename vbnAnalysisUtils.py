@@ -70,14 +70,17 @@ def getBehavData(stim):
     return flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes
 
 
+def getUnitsInCluster(units,clustUnitIds,clustIds,clust): 
+    return np.in1d(units.index,clustUnitIds[np.in1d(clustUnitIds,units.index) & (clustIds==clust)])
+
+
 def getUnitsInRegion(units,region,layer=None,rs=False,fs=False):
     if region in ('SC/MRN cluster 1','SC/MRN cluster 2'):
-        clust = 1 if '1' in region else 2
         dirPath = pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/VBN_video_analysis')
-        clustId = np.load(os.path.join(dirPath,'sc_mrn_clusterId.npy'))
-        clustUnitId = np.load(os.path.join(dirPath,'sc_mrn_clusterUnitId.npy'))
-        u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
-        inRegion = np.in1d(units.index,u)
+        clustUnitIds = np.load(os.path.join(dirPath,'sc_mrn_clusterUnitId.npy'))
+        clustIds = np.load(os.path.join(dirPath,'sc_mrn_clusterId.npy'))
+        clust = 1 if '1' in region else 2
+        inRegion = getUnitsInCluster(units,clustUnitIds,clustIds,clust)
     else:
         if region=='VISall':
             reg = ('VISp','VISl','VISrl','VISal','VISpm','VISam')
@@ -101,11 +104,10 @@ def getUnitsInRegion(units,region,layer=None,rs=False,fs=False):
                     inRegion = inRegion & ~rsUnits
         if 'cluster' in region:
             clustTable = pd.read_csv(pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables/units_with_fast_slow_cluster_ids.csv'))
-            clustId = np.array(clustTable['fast_slow_cluster_id'])
-            clustUnitId = np.array(clustTable['unit_id'])
+            clustUnitIds = np.array(clustTable['unit_id'])
+            clustIds = np.array(clustTable['fast_slow_cluster_id'])
             clust = 1 if 'cluster 1' in region else 2
-            u = clustUnitId[np.in1d(clustUnitId,units.index) & (clustId==clust)]
-            inRegion = np.in1d(units.index,u)
+            inRegion = inRegion & getUnitsInCluster(units,clustUnitIds,clustIds,clust)
     return inRegion
     
 
