@@ -24,7 +24,7 @@ slurm = Slurm(cpus_per_task=1,
               job_name='vbnFacemap',
               output=f'{stdout_location}/{Slurm.JOB_ARRAY_MASTER_ID}_{Slurm.JOB_ARRAY_ID}.out',
               time='24:00:00',
-              mem_per_cpu='8gb')
+              mem_per_cpu='16gb')
 
 baseDir = '/allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables'
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))

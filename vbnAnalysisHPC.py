@@ -18,7 +18,7 @@ import h5py
 import sklearn
 from sklearn.svm import LinearSVC
 import facemap.process
-from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInCluster, getUnitsInRegion, findResponsiveUnits, getTrainTestSplits, trainDecoder, fitAccumulatorBrute, fitAccumulator, runAccumulator
+from vbnAnalysisUtils import dictToHdf5, findNearest, getBehavData, getUnitsInCluster, getUnitsInRegion, apply_unit_quality_filter, findResponsiveUnits, getUnitSamples, getTrainTestSplits, trainDecoder, fitAccumulatorBrute, fitAccumulator, runAccumulator
 
 
 baseDir = pathlib.Path('//allen/programs/mindscope/workgroups/np-behavior/vbn_data_release/supplemental_tables')
@@ -30,7 +30,7 @@ stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 videoTable = pd.read_excel(os.path.join(baseDir,'vbn_video_paths_full_validation.xlsx'))
 videoTable.insert(0,'session_id',[int(s[:s.find('_')]) for s in videoTable['exp_id']])
 
-unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
+unitTable = pd.read_csv(os.path.join(baseDir,'master_unit_table.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 clusterTable = pd.read_csv(os.path.join(baseDir,'unit_cluster_labels.csv'))
@@ -145,125 +145,123 @@ def decodeLicksFromFacemap(sessionId):
 
 
 def decodeLicksFromUnits(sessionId):
+    useResponsiveUnits = False
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
-    decodeWindowSampleSize = 20
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
-    useClusters = True
+    unitSampleDecodeWindow = 750
+    decodeWindowSampleSize = 10
 
-    if useClusters:
-        regions = ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels'])]
-    else:    
-        regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-                   'MRN','MB','SC','APN','NOT','Hipp','Sub',
-                   'SC/MRN cluster 1','SC/MRN cluster 2')
+    regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+               'MRN','MB','SC','APN','NOT','Hipp')
+
+    clusters = ['all'] + ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels']) + 1]
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
+
+    qualityUnits = apply_unit_quality_filter(units)
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     
-    d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
-         for sampleSize in unitSampleSize} for region in regions}
+    d = {region: {cluster: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
+         for sampleSize in unitSampleSize} for cluster in clusters} for region in regions}
     d['regions'] = regions
+    d['clusters'] = clusters
+    d['unitSampleSize'] = unitSampleSize
     d['decodeWindows'] = decodeWindows
+    d['unitSampleDecodeWindow'] = unitSampleDecodeWindow
+    d['decodeWindowSampleSize'] = decodeWindowSampleSize
     d['lick'] = lick[nonChangeFlashes]
+
     y = lick[nonChangeFlashes]
+
     warnings.filterwarnings('ignore')
     for region in regions:
-        if useClusters:
-            clust = int(region[region.find(' ')+1:])
-            inRegion = getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clust)
-        else:
-            inRegion = getUnitsInRegion(units,region)
-        if not any(inRegion):
-            continue
-                
-        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
-        for i,u in enumerate(np.where(inRegion)[0]):
-            sp[i]=spikes[u,:,:]
-        
-        if useClusters:
-            hasResp = np.ones(inRegion.sum(),dtype=bool) 
-        else:
-            changeSp = sp[:,changeFlashes,:]
-            preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
-            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
-        nUnits = hasResp.sum()
-
-        flashSp = sp[hasResp][:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nonChangeFlashes.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
-        
-        for sampleSize in unitSampleSize:
-            if nUnits < sampleSize:
+        inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
+        for clustId,cluster in enumerate(clusters):
+            unitsToUse = inRegion if clustId==0 else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustId)
+            nUnits = unitsToUse.sum()
+            if nUnits < 0:
                 continue
-            if sampleSize>1:
-                if sampleSize==nUnits:
-                    nSamples = 1
-                    unitSamples = [np.arange(nUnits)]
-                else:
-                    # >99% chance each neuron is chosen at least once
-                    nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
-                    unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
-            else:
-                nSamples = nUnits
-                unitSamples = [[i] for i in range(nUnits)]
+                
+            sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(unitsToUse)[0]):
+                sp[i]=spikes[u,:,:]
+            
+            if useResponsiveUnits:
+                changeSp = sp[:,changeFlashes,:]
+                preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+                hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+                sp = sp[hasResp]
+                nUnits = hasResp.sum()
 
-            for winEnd in decodeWindows:
-                if sampleSize!=decodeWindowSampleSize and winEnd!=decodeWindows[-1]:
+            flashSp = sp[:,nonChangeFlashes,:decodeWindows[-1]].reshape((nUnits,nonChangeFlashes.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)
+            
+            for sampleSize in unitSampleSize:
+                if nUnits < sampleSize:
                     continue
-                winEnd = int(winEnd/decodeWindowSize)
-                for metric in d[region][sampleSize]:
-                    d[region][sampleSize][metric].append([])
-                for unitSamp in unitSamples:
-                    X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nonChangeFlashes.sum(),-1))                        
-                    cv = trainDecoder(model,X,y,nCrossVal)
-                    d[region][sampleSize]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
-                    d[region][sampleSize]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
-                    d[region][sampleSize]['accuracy'][-1].append(np.mean(cv['test_score']))
-                    d[region][sampleSize]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
-                    d[region][sampleSize]['prediction'][-1].append(cv['predict'])
-                    d[region][sampleSize]['confidence'][-1].append(cv['decision_function'])
-                for metric in d[region][sampleSize]:
-                    if metric == 'prediction':
-                        d[region][sampleSize][metric][-1] = np.mean(d[region][sampleSize][metric][-1],axis=0)
-                    else:
-                        d[region][sampleSize][metric][-1] = np.median(d[region][sampleSize][metric][-1],axis=0)
+                unitSamples = getUnitSamples(sampleSize,nUnits)
+
+                for winEnd in decodeWindows:
+                    if sampleSize!=decodeWindowSampleSize and winEnd!=unitSampleDecodeWindow:
+                        continue
+                    winEnd = int(winEnd/decodeWindowSize)
+                    for metric in d[region][cluster][sampleSize]:
+                        d[region][cluster][sampleSize][metric].append([])
+                    for unitSamp in unitSamples:
+                        X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nonChangeFlashes.sum(),-1))                        
+                        cv = trainDecoder(model,X,y,nCrossVal)
+                        d[region][cluster][sampleSize]['trainAccuracy'][-1].append(np.mean(cv['train_score']))
+                        d[region][cluster][sampleSize]['featureWeights'][-1].append(np.mean(cv['coef'],axis=0).squeeze())
+                        d[region][cluster][sampleSize]['accuracy'][-1].append(np.mean(cv['test_score']))
+                        d[region][cluster][sampleSize]['balancedAccuracy'][-1].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
+                        d[region][cluster][sampleSize]['prediction'][-1].append(cv['predict'])
+                        d[region][cluster][sampleSize]['confidence'][-1].append(cv['decision_function'])
+                    for metric in d[region][cluster][sampleSize]:
+                        if metric == 'prediction':
+                            d[region][cluster][sampleSize][metric][-1] = np.mean(d[region][cluster][sampleSize][metric][-1],axis=0)
+                        else:
+                            d[region][cluster][sampleSize][metric][-1] = np.median(d[region][cluster][sampleSize][metric][-1],axis=0)
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_'+str(sessionId)+'.npy'),d)
 
 
 def decodeChange(sessionId):
+    trainOnFlashesWithLicks = True
+    useResponsiveUnits = False
+
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
-    decodeWindowSampleSize = 20
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
-    useClusters = True
+    unitSampleDecodeWindow = 750
+    decodeWindowSampleSize = 10
+   
+    regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+               'MRN','MB','SC','APN','NOT','Hipp')
 
-    if useClusters:
-        regions = ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels'])]
-    else:    
-        regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-                   'MRN','MB','SC','APN','NOT','Hipp','Sub',
-                   'SC/MRN cluster 1','SC/MRN cluster 2')
+    clusters = ['all'] + ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels']) + 1]
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
     spikes = unitData[str(sessionId)]['spikes']
+
+    qualityUnits = apply_unit_quality_filter(units)
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
@@ -284,11 +282,14 @@ def decodeChange(sessionId):
     falseAlarm = falseAlarm & catchFlashes
     correctReject = correctReject & catchFlashes
 
-    d = {region: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','accuracyFamiliar','accuracyNovel','prediction','confidence')}
-         for sampleSize in unitSampleSize} for region in regions}
+    d = {region: {cluster: {sampleSize: {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','accuracyFamiliar','accuracyNovel','prediction','confidence')}
+         for sampleSize in unitSampleSize} for cluster in clusters} for region in regions}
     d['regions'] = regions
+    d['clusters'] = clusters
     d['unitSampleSize'] = unitSampleSize
     d['decodeWindows'] = decodeWindows
+    d['unitSampleDecodeWindow'] = unitSampleDecodeWindow
+    d['decodeWindowSampleSize'] = decodeWindowSampleSize
     d['imageName'] = imageName
     d['change'] = changeFlashes
     d['preChange'] = preChangeFlashes
@@ -305,117 +306,104 @@ def decodeChange(sessionId):
     d['correctReject'] = correctReject
 
     y = np.full(nFlash,np.nan)
-    y[changeFlashes] = 1
-    y[preChangeFlashes] = 0
-    yind = ~np.isnan(y)
+    if trainOnFlashesWithLicks:
+        y[changeFlashes & lick] = 1
+        y[nonChangeFlashes & lick] = 0
+    else:
+        y[changeFlashes] = 1
+        y[preChangeFlashes] = 0
     
     warnings.filterwarnings('ignore')
     for region in regions:
-        if useClusters:
-            clust = int(region[region.find(' ')+1:])
-            inRegion = getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clust)
-        else:
-            inRegion = getUnitsInRegion(units,region)
-        if not any(inRegion):
-            continue
-                
-        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
-        for i,u in enumerate(np.where(inRegion)[0]):
-            sp[i]=spikes[u,:,:]
-            
-        if useClusters:
-            hasResp = np.ones(inRegion.sum(),dtype=bool) 
-        else:
-            changeSp = sp[:,changeFlashes,:]
-            preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
-            hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
-        nUnits = hasResp.sum()
-
-        flashSp = sp[hasResp,:,:decodeWindows[-1]].reshape((nUnits,nFlash,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
-        
-        for sampleSize in unitSampleSize:
-            if nUnits < sampleSize:
+        inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
+        for clustId,cluster in enumerate(clusters):
+            unitsToUse = inRegion if clustId==0 else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustId)
+            nUnits = unitsToUse.sum()
+            if nUnits < 0:
                 continue
-            if sampleSize>1:
-                if sampleSize==nUnits:
-                    nSamples = 1
-                    unitSamples = [np.arange(nUnits)]
-                else:
-                    # >99% chance each neuron is chosen at least once
-                    nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
-                    unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
-            else:
-                nSamples = nUnits
-                unitSamples = [[i] for i in range(nUnits)]
+                
+            sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
+            for i,u in enumerate(np.where(unitsToUse)[0]):
+                sp[i]=spikes[u,:,:]
+            
+            if useResponsiveUnits:
+                changeSp = sp[:,changeFlashes,:]
+                preChangeSp = sp[:,np.where(changeFlashes)[0]-1,:]
+                hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
+                sp = sp[hasResp]
+                nUnits = hasResp.sum()
 
-            for winEnd in decodeWindows:
-                if sampleSize!=decodeWindowSampleSize and winEnd!=decodeWindows[-1]:
+            flashSp = sp[:,:,:decodeWindows[-1]].reshape((nUnits,nFlash,len(decodeWindows),decodeWindowSize)).sum(axis=-1)
+            
+            for sampleSize in unitSampleSize:
+                if nUnits < sampleSize:
                     continue
-                winEnd = int(winEnd/decodeWindowSize)
+                unitSamples = getUnitSamples(sampleSize,nUnits)
 
-                for metric in d[region][sampleSize]:
-                    d[region][sampleSize][metric].append([])
+                for winEnd in decodeWindows:
+                    if sampleSize!=decodeWindowSampleSize and winEnd!=unitSampleDecodeWindow:
+                        continue
+                    winEnd = int(winEnd/decodeWindowSize)
 
-                for unitSamp in unitSamples:
-                    # get train/test sets from change and pre-change flashes
-                    if np.any(novelFlashes):
-                        # balance novel and familiar changes
-                        train = []
-                        test = []
-                        for i in (novelFlashes,~novelFlashes):
-                            j = np.where(changeFlashes & i)[0]
-                            j = np.concatenate((j,j-1))
-                            k = y.copy()
-                            k[j] = np.nan
-                            tr,ts = getTrainTestSplits(k,nCrossVal)
-                            train.append(tr)
-                            test.append(ts)
-                        trainInd = [list(i)+list(j) for i,j in zip(*train)]
-                        testInd = [list(i)+list(j) for i,j in zip(*test)]
-                    else:
-                        trainInd,testInd = getTrainTestSplits(y,nCrossVal)
-                    # use all change/pre-change as training set for all other flashes
-                    trainInd.append(np.where(~np.isnan(y))[0])
-                    testInd.append(np.where(np.isnan(y))[0])
+                    for metric in d[region][cluster][sampleSize]:
+                        d[region][cluster][sampleSize][metric].append([])
 
-                    X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nFlash,-1))       
-                    trainAccuracy = np.zeros(nCrossVal+1)
-                    featureWeights = np.zeros((nCrossVal+1,X.shape[1]))
-                    accuracy = np.zeros(nCrossVal)
-                    accuracyFamiliar = np.zeros(nCrossVal)
-                    accuracyNovel = np.zeros(nCrossVal)
-                    prediction = np.zeros(nFlash)
-                    confidence = np.zeros(nFlash)
-                    for k,(train,test) in enumerate(zip(trainInd,testInd)):
-                        decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
-                        decoder.fit(X[train],y[train])
-                        trainAccuracy[k] = decoder.score(X[train],y[train])
-                        featureWeights[k] = np.squeeze(decoder.coef_)
-                        if k < nCrossVal:
-                            accuracy[k] = decoder.score(X[test],y[test])
-                            if np.any(novelFlashes):
-                                fam = (y[test]==0) & (~novelFlashes[[i+1 for i in test]]) | ((y[test]==1) & (~novelFlashes[test]))
-                                accuracyFamiliar[k] = decoder.score(X[test][fam],y[test][fam])
-                                nov = (y[test]==0) & (novelFlashes[[i+1 for i in test]]) | ((y[test]==1) & (novelFlashes[test]))
-                                accuracyNovel[k] = decoder.score(X[test][nov],y[test][nov])
-                        prediction[test] = decoder.predict(X[test])
-                        confidence[test] = decoder.decision_function(X[test])
-                    d[region][sampleSize]['trainAccuracy'][-1].append(trainAccuracy[-1])
-                    d[region][sampleSize]['featureWeights'][-1].append(featureWeights[-1])
-                    d[region][sampleSize]['accuracy'][-1].append(np.mean(accuracy))
-                    d[region][sampleSize]['accuracyFamiliar'][-1].append(np.mean(accuracyFamiliar))
-                    d[region][sampleSize]['accuracyNovel'][-1].append(np.mean(accuracyNovel))
-                    d[region][sampleSize]['prediction'][-1].append(prediction)
-                    d[region][sampleSize]['confidence'][-1].append(confidence)
+                    for unitSamp in unitSamples:
+                        # get train/test sets
+                        if np.any(novelFlashes):
+                            # balance novel and familiar changes
+                            train = []
+                            test = []
+                            for i in (novelFlashes,~novelFlashes):
+                                k = y.copy()
+                                k[i] = np.nan
+                                tr,ts = getTrainTestSplits(k,nCrossVal)
+                                train.append(tr)
+                                test.append(ts)
+                            trainInd = [list(i)+list(j) for i,j in zip(*train)]
+                            testInd = [list(i)+list(j) for i,j in zip(*test)]
+                        else:
+                            trainInd,testInd = getTrainTestSplits(y,nCrossVal)
+                        # use all train/test sets as training set for all other flashes
+                        trainInd.append(np.where(~np.isnan(y))[0])
+                        testInd.append(np.where(np.isnan(y))[0])
 
-                # take median of decoding metrics across unit samples 
-                d[region][sampleSize]['trainAccuracy'][-1] = np.median(d[region][sampleSize]['trainAccuracy'][-1])
-                d[region][sampleSize]['featureWeights'][-1] = np.median(d[region][sampleSize]['featureWeights'][-1],axis=(0,1))
-                d[region][sampleSize]['accuracy'][-1] = np.median(d[region][sampleSize]['accuracy'][-1],axis=0)
-                d[region][sampleSize]['accuracyFamiliar'][-1] = np.median(d[region][sampleSize]['accuracyFamiliar'][-1],axis=0)
-                d[region][sampleSize]['accuracyNovel'][-1] = np.median(d[region][sampleSize]['accuracyNovel'][-1],axis=0)
-                d[region][sampleSize]['prediction'][-1] = np.mean(d[region][sampleSize]['prediction'][-1],axis=0)
-                d[region][sampleSize]['confidence'][-1] = np.median(d[region][sampleSize]['confidence'][-1],axis=0)
+                        X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nFlash,-1))       
+                        trainAccuracy = np.zeros(nCrossVal+1)
+                        featureWeights = np.zeros((nCrossVal+1,X.shape[1]))
+                        accuracy = np.zeros(nCrossVal)
+                        accuracyFamiliar = np.zeros(nCrossVal)
+                        accuracyNovel = np.zeros(nCrossVal)
+                        prediction = np.zeros(nFlash)
+                        confidence = np.zeros(nFlash)
+                        for k,(train,test) in enumerate(zip(trainInd,testInd)):
+                            decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
+                            decoder.fit(X[train],y[train])
+                            trainAccuracy[k] = sklearn.metrics.balanced_accuracy_score(y[train],decoder.predict(X[train]))
+                            featureWeights[k] = np.squeeze(decoder.coef_)
+                            if k < nCrossVal:
+                                accuracy[k] = sklearn.metrics.balanced_accuracy_score(y[test],decoder.predict(X[test]))
+                                if np.any(novelFlashes):
+                                    accuracyFamiliar[k] = sklearn.metrics.balanced_accuracy_score(y[test][~novelFlashes[test]],decoder.predict(X[test][~novelFlashes[test]]))
+                                    accuracyNovel[k] = sklearn.metrics.balanced_accuracy_score(y[test][novelFlashes[test]],decoder.predict(X[test][novelFlashes[test]]))
+                            prediction[test] = decoder.predict(X[test])
+                            confidence[test] = decoder.decision_function(X[test])
+                        d[region][cluster][sampleSize]['trainAccuracy'][-1].append(trainAccuracy[-1])
+                        d[region][cluster][sampleSize]['featureWeights'][-1].append(featureWeights[-1])
+                        d[region][cluster][sampleSize]['accuracy'][-1].append(np.mean(accuracy))
+                        d[region][cluster][sampleSize]['accuracyFamiliar'][-1].append(np.mean(accuracyFamiliar))
+                        d[region][cluster][sampleSize]['accuracyNovel'][-1].append(np.mean(accuracyNovel))
+                        d[region][cluster][sampleSize]['prediction'][-1].append(prediction)
+                        d[region][cluster][sampleSize]['confidence'][-1].append(confidence)
+
+                    # take median of decoding metrics across unit samples 
+                    d[region][cluster][sampleSize]['trainAccuracy'][-1] = np.median(d[region][cluster][sampleSize]['trainAccuracy'][-1])
+                    d[region][cluster][sampleSize]['featureWeights'][-1] = np.median(d[region][cluster][sampleSize]['featureWeights'][-1],axis=(0,1))
+                    d[region][cluster][sampleSize]['accuracy'][-1] = np.median(d[region][cluster][sampleSize]['accuracy'][-1],axis=0)
+                    d[region][cluster][sampleSize]['accuracyFamiliar'][-1] = np.median(d[region][cluster][sampleSize]['accuracyFamiliar'][-1],axis=0)
+                    d[region][cluster][sampleSize]['accuracyNovel'][-1] = np.median(d[region][cluster][sampleSize]['accuracyNovel'][-1],axis=0)
+                    d[region][cluster][sampleSize]['prediction'][-1] = np.mean(d[region][cluster][sampleSize]['prediction'][-1],axis=0)
+                    d[region][cluster][sampleSize]['confidence'][-1] = np.median(d[region][cluster][sampleSize]['confidence'][-1],axis=0)
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_'+str(sessionId)+'.npy'),d)
@@ -663,8 +651,8 @@ if __name__ == "__main__":
     parser.add_argument('--sessionId',type=int)
     args = parser.parse_args()
     sessionId = args.sessionId
-    #runFacemap(sessionId)
-    #decodeLicksFromFacemap(sessionId)
-    decodeLicksFromUnits(sessionId)
+    # runFacemap(sessionId)
+    # decodeLicksFromFacemap(sessionId)
+    # decodeLicksFromUnits(sessionId)
     decodeChange(sessionId)
-    #fitIntegratorModel(sessionId)
+    # fitIntegratorModel(sessionId)

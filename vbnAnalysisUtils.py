@@ -109,6 +109,16 @@ def getUnitsInRegion(units,region,layer=None,rs=False,fs=False):
             clust = 1 if 'cluster 1' in region else 2
             inRegion = inRegion & getUnitsInCluster(units,clustUnitIds,clustIds,clust)
     return inRegion
+
+
+def apply_unit_quality_filter(unit_table):
+ 
+    qc_filter = [(unit_table['isi_violations']<0.5)&
+                (unit_table['amplitude_cutoff']<0.1)&
+                (unit_table['presence_ratio']>0.9)&
+                (unit_table['quality']=='good')]
+   
+    return qc_filter[0].values
     
 
 def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
@@ -124,6 +134,21 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     pval = np.array([1 if np.sum(r-b)==0 else scipy.stats.wilcoxon(b,r)[1] for b,r in zip(base,resp)])
     
     return hasSpikes & hasPeakResp & (pval<0.05)
+
+
+def getUnitSamples(sampleSize,nUnits):
+    if sampleSize>1:
+        if sampleSize==nUnits:
+            nSamples = 1
+            unitSamples = [np.arange(nUnits)]
+        else:
+            # >99% chance each neuron is chosen at least once
+            nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
+            unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
+    else:
+        nSamples = nUnits
+        unitSamples = [[i] for i in range(nUnits)]
+    return unitSamples
 
 
 def getTrainTestSplits(y,nSplits,hasClasses=True):
