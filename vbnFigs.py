@@ -15,7 +15,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['pdf.fonttype'] = 42
 import sklearn.metrics
-from vbnAnalysisUtils import getBehavData, getUnitsInRegion, findResponsiveUnits, cluster
+from vbnAnalysisUtils import getBehavData, getUnitsInCluster, getUnitsInRegion, apply_unit_quality_filter, findResponsiveUnits, cluster
 
 
 baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\supplemental_tables'
@@ -24,62 +24,155 @@ outputDir = r'\\allen\programs\mindscope\workgroups\np-behavior\VBN_video_analys
 
 stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
 
-unitTable = pd.read_csv(os.path.join(baseDir,'units_with_cortical_layers.csv'))
+unitTable = pd.read_csv(os.path.join(baseDir,'master_unit_table.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
+
+clusterTable = pd.read_csv(os.path.join(baseDir,'unit_cluster_labels.csv'))
 
 sessionIds = stimTable['session_id'].unique()
 novelSessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
 
 
-# number of flashes and licks
-nFlashes = []
-nLicks = []
+
+# number of neurons per region/cluster
+regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+           'Hipp','APN','NOT','SC','MRN','MB')
+clusters = ['all'] + ['cluster '+str(c+1) for c in range(15)]
+
+
+nUnits = {region: {clust: [] for clust in clusters} for region in regions}
+for sessionId in sessionIds:
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    qualityUnits = apply_unit_quality_filter(units)
+    for region in regions:
+        inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
+        for clustNum,clustName in enumerate(clusters):
+            unitsToUse = inRegion if clustName=='all' else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustNum-1)
+            nUnits[region][clustName].append(unitsToUse.sum())
+
+fig = plt.figure(figsize=(18,10))
+gs = matplotlib.gridspec.GridSpec(len(regions),len(clusters))
+bins = np.concatenate((np.arange(21),[1000]))
+x = np.arange(len(bins)-1)
+for i,region in enumerate(regions):
+    for j,clust in enumerate(clusters):
+        ax = fig.add_subplot(gs[i,j])
+        nu = nUnits[region][clust]
+        h = np.histogram(nu,bins)[0]
+        ax.bar(x,h,width=1,color='k',edgecolor='k')
+        ax.text(2.5,2.5,'('+str(sum([n>0 for n in nu]))+', '+str(sum(nu))+')',color='r')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        if i<len(regions)-1:
+            ax.set_xticks([])
+        if j>0:
+            ax.set_yticks([])
+        ax.set_xlim([-1,21])
+        ax.set_ylim([0,5])
+        if i==len(regions)-1 and j==len(clusters)//2:
+            ax.set_xlabel('# neurons',fontsize=8)
+        if j==0:
+            ax.set_ylabel(region,rotation=0,ha='right',fontsize=8)
+        if i==0:
+            ax.set_title(clust,fontsize=8)
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+n = np.zeros((len(regions)-1,len(clusters)-1))
+for i,region in enumerate(regions[1:]):
+    for j,clust in enumerate(clusters[1:]):
+        n[i,j] = sum(nUnits[region][clust])
+n /= np.sum(n,axis=1)[:,None]
+im = ax.imshow(n,cmap='magma',clim=(0,0.5))
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+xticks = np.arange(len(clusters)-1)
+ax.set_xticks(xticks)
+ax.set_xticklabels(xticks+1)
+ax.set_xlabel('Cluster')
+ax.set_yticks(np.arange(len(regions)-1))
+ax.set_yticklabels(regions[1:],rotation=0,ha='right')
+ax.set_ylabel('Region')
+ax.set_title('Fraction of neurons from region in cluster')
+cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+plt.tight_layout()
+
+
+# number of non-change and change flashes with or without licks
+flashTypes = ('change','non-change')
+imageTypes = ('all','familiar','novel')
+nFlashes = {flash: {img: [] for img in imageTypes} for flash in flashTypes}
+nLicks = copy.deepcopy(nFlashes)
+lickProb = copy.deepcopy(nFlashes)
 for sessionId in sessionIds:
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-    nFlashes.append(nonChangeFlashes.sum())
-    nLicks.append(lick[nonChangeFlashes].sum())
-nFlashes = np.array(nFlashes)
-nLicks = np.array(nLicks)
-lickProb = nLicks / nFlashes
+    for flashType in flashTypes:
+        flashes = changeFlashes if flashType=='change' else nonChangeFlashes
+        for imageType in imageTypes:
+            if imageType=='all' or np.any(novelFlashes):
+                ind = flashes if imageType=='all' else (flashes & novelFlashes if imageType=='novel' else flashes & ~novelFlashes)
+                nFlashes[flashType][imageType].append(np.sum(ind))
+                nLicks[flashType][imageType].append(np.sum(lick[ind]))
+
+for flashType in flashTypes:
+    for imageType in imageTypes:
+        nFlashes[flashType][imageType] = np.array(nFlashes[flashType][imageType])
+        nLicks[flashType][imageType] = np.array(nLicks[flashType][imageType])
+        lickProb[flashType][imageType] = nLicks[flashType][imageType] / nFlashes[flashType][imageType]
 
 fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-binWidth = 100
-bins = np.arange(0,nFlashes.max()+binWidth/2,binWidth)
-h = np.histogram(nFlashes,bins)[0]
-ax.bar(bins[:-1]+binWidth/2,h,width=binWidth,color='k',edgecolor='k')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('Number of flashes')
-ax.set_ylabel('Number of sessions')
-plt.tight_layout()
-
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
+gs = matplotlib.gridspec.GridSpec(len(imageTypes),len(flashTypes))
 binWidth = 10
-bins = np.arange(0,nLicks.max()+binWidth/2,binWidth)
-h = np.histogram(nLicks,bins)[0]
-ax.bar(bins[:-1]+binWidth/2,h,width=binWidth,color='k',edgecolor='k')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('Number of licks')
-ax.set_ylabel('Number of sessions')
+for i,imageType in enumerate(imageTypes):
+    for j,flashType in enumerate(flashTypes):
+        ax = fig.add_subplot(gs[i,j])
+        bins = np.arange(0,nFlashes[flashType][imageType].max()+binWidth/2,binWidth)
+        h = np.histogram(nFlashes[flashType][imageType],bins)[0]
+        ax.bar(bins[:-1]+binWidth/2,h,width=binWidth,color='k',edgecolor='k')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlabel('Number of flashes')
+        ax.set_ylabel('Number of sessions')
+        ax.set_title(flashType+', '+imageType)
 plt.tight_layout()
 
 fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
+gs = matplotlib.gridspec.GridSpec(len(imageTypes),len(flashTypes))
+binWidth = 5
+for i,imageType in enumerate(imageTypes):
+    for j,flashType in enumerate(flashTypes):
+        ax = fig.add_subplot(gs[i,j])
+        bins = np.arange(0,nLicks[flashType][imageType].max()+binWidth/2,binWidth)
+        h = np.histogram(nLicks[flashType][imageType],bins)[0]
+        ax.bar(bins[:-1]+binWidth/2,h,width=binWidth,color='k',edgecolor='k')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlabel('Number of licks')
+        ax.set_ylabel('Number of sessions')
+        ax.set_title(flashType+', '+imageType)
+plt.tight_layout()
+
+fig = plt.figure()
+gs = matplotlib.gridspec.GridSpec(len(imageTypes),len(flashTypes))
 binWidth = 0.01
-bins = np.arange(0,lickProb.max()+binWidth/2,binWidth)
-h = np.histogram(lickProb,bins)[0]
-ax.bar(bins[:-1]+binWidth/2,h,width=binWidth,color='k',edgecolor='k')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlabel('Fraction of flashes with lick')
-ax.set_ylabel('Number of sessions')
+for i,imageType in enumerate(imageTypes):
+    for j,flashType in enumerate(flashTypes):
+        ax = fig.add_subplot(gs[i,j])
+        bins = np.arange(0,lickProb[flashType][imageType].max()+binWidth/2,binWidth)
+        h = np.histogram(lickProb[flashType][imageType],bins)[0]
+        ax.bar(bins[:-1]+binWidth/2,h,width=binWidth,color='k',edgecolor='k')
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlabel('Fraction of flashes with lick')
+        ax.set_ylabel('Number of sessions')
+        ax.set_title(flashType+', '+imageType)
 plt.tight_layout()
 
 
@@ -281,31 +374,30 @@ plt.tight_layout()
 
 
 # unit change decoding
-regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-           'Hipp','APN','NOT','SC','MRN','MB',
-           'SC/MRN cluster 1','SC/MRN cluster 2')
-regions = ['cluster '+str(c) for c in range(15)]
-regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
+regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+           'Hipp','APN','NOT','SC','MRN','MB')
+clusters = ['all'] + ['cluster '+str(c+1) for c in range(15)]
 
 unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
-decodeWindowSampleSize = 20
+decodeWindowSampleSize = 10
+unitSampleDecodeWindow = 750
 
-unitChangeDecoding = {region: [] for region in regions}
-changeDecodingSampleSize = {region: [] for region in regions}
+unitChangeDecoding = {region: {clust: [] for clust in clusters} for region in regions}
+changeDecodingSampleSize = copy.deepcopy(unitChangeDecoding)
 
 imageTypes = ('familiar session','familiar','novel')
 flashTypes = ('change','catch','nonChange','prevOmitted')
 
-accuracy = {region: {imgType: [] for imgType in imageTypes} for region in regions}
+accuracy = {region: {clust: {imgType: [] for imgType in imageTypes} for clust in clusters} for region in regions}
 
 respRateMouseAllSessions = {img: {flash: [] for flash in flashTypes} for img in imageTypes}
-respRateMouse = {region: copy.deepcopy(respRateMouseAllSessions) for region in regions}
+respRateMouse = {region: {clust: copy.deepcopy(respRateMouseAllSessions) for clust in clusters} for region in regions}
 respRate = copy.deepcopy(respRateMouse)
 
 images = {'G': ('im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'),
           'H': ('im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r')}
 respMatMouseAllSessions = {sessionType: {imgSet: [] for imgSet in ('G','H')} for sessionType in ('familiar','novel')}
-respMatMouse = {region: copy.deepcopy(respMatMouseAllSessions) for region in regions}
+respMatMouse = {region: {clust: copy.deepcopy(respMatMouseAllSessions) for clust in clusters} for region in regions}
 respMat = copy.deepcopy(respMatMouse)
 
 for n,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_*.npy'))):
@@ -331,83 +423,93 @@ for n,f in enumerate(glob.glob(os.path.join(outputDir,'unitChangeDecoding','unit
                 respMatMouseAllSessions[sessionType][imgSet][-1][i,j] = np.mean(d['lick'][c][m])
         
         for region in regions:
-            a = d[region][decodeWindowSampleSize]['accuracy']
-            if len(a) > 0:
-                unitChangeDecoding[region].append(a)
-                if sessionType == 'familiar':
-                    accuracy[region]['familiar session'].append(a)
-                else:
-                    accuracy[region]['familiar'].append(d[region][decodeWindowSampleSize]['accuracyFamiliar']) 
-                    accuracy[region]['novel'].append(d[region][decodeWindowSampleSize]['accuracyNovel'])
-                
-            changeDecodingSampleSize[region].append([])
-            for sampleSize in d['unitSampleSize']:
-                a = d[region][sampleSize]['accuracy']
+            for clust in clusters:
+                a = d[region][clust][decodeWindowSampleSize]['accuracy']
                 if len(a) > 0:
-                    changeDecodingSampleSize[region][-1].append(a[-1])
-                else:
-                    changeDecodingSampleSize[region][-1].append(np.nan)
-            
-            pred = d[region][decodeWindowSampleSize]['prediction']
-            if len(pred) > 0:
-                p = np.mean(np.array(pred)[:,d['preChange']],axis=1)
-                for flashes in flashTypes:
+                    unitChangeDecoding[region][clust].append(a)
                     if sessionType == 'familiar':
-                        respRateMouse[region]['familiar session'][flashes].append(np.mean(d['lick'][d[flashes]]))
-                        respRate[region]['familiar session'][flashes].append(np.mean(np.array(pred)[:,d[flashes]],axis=1) - p)
+                        accuracy[region][clust]['familiar session'].append(a)
                     else:
-                        respRateMouse[region]['familiar'][flashes].append(np.mean(d['lick'][d[flashes] & ~d['novel']]))
-                        respRateMouse[region]['novel'][flashes].append(np.mean(d['lick'][d[flashes] & d['novel']]))
-                        respRate[region]['familiar'][flashes].append(np.mean(np.array(pred)[:,d[flashes] & ~d['novel']],axis=1) - p)
-                        respRate[region]['novel'][flashes].append(np.mean(np.array(pred)[:,d[flashes] & d['novel']],axis=1) - p)
+                        accuracy[region][clust]['familiar'].append(d[region][clust][decodeWindowSampleSize]['accuracyFamiliar']) 
+                        accuracy[region][clust]['novel'].append(d[region][clust][decodeWindowSampleSize]['accuracyNovel'])
+                    
+                changeDecodingSampleSize[region][clust].append([])
+                for sampleSize in d['unitSampleSize']:
+                    a = d[region][clust][sampleSize]['accuracy']
+                    if len(a) > 0:
+                        changeDecodingSampleSize[region][clust][-1].append(a[d['unitSampleSize']==d['unitSampleDecodeWindow']])
+                    else:
+                        changeDecodingSampleSize[region][clust][-1].append(np.nan)
                 
-                respMatMouse[region][sessionType][imgSet].append(np.zeros((8,8)))
-                respMat[region][sessionType][imgSet].append(np.zeros((len(d['decodeWindows']),8,8)))
-                for i,preImg in enumerate(images[imgSet]):
-                    for j,chImg in enumerate(images[imgSet]):
-                        m = (d['imageName'][c-1]==preImg) & (d['imageName'][c]==chImg)
-                        respMatMouse[region][sessionType][imgSet][-1][i,j] = np.mean(d['lick'][c][m])
-                        for k in range(len(d['decodeWindows'])):
-                            respMat[region][sessionType][imgSet][-1][k,i,j] = np.mean(pred[k][c][m])
+                pred = d[region][clust][decodeWindowSampleSize]['prediction']
+                if len(pred) > 0:
+                    p = np.mean(np.array(pred)[:,d['preChange']],axis=1)
+                    for flashes in flashTypes:
+                        if sessionType == 'familiar':
+                            respRateMouse[region][clust]['familiar session'][flashes].append(np.mean(d['lick'][d[flashes]]))
+                            respRate[region][clust]['familiar session'][flashes].append(np.mean(np.array(pred)[:,d[flashes]],axis=1) - p)
+                        else:
+                            respRateMouse[region][clust]['familiar'][flashes].append(np.mean(d['lick'][d[flashes] & ~d['novel']]))
+                            respRateMouse[region][clust]['novel'][flashes].append(np.mean(d['lick'][d[flashes] & d['novel']]))
+                            respRate[region][clust]['familiar'][flashes].append(np.mean(np.array(pred)[:,d[flashes] & ~d['novel']],axis=1) - p)
+                            respRate[region][clust]['novel'][flashes].append(np.mean(np.array(pred)[:,d[flashes] & d['novel']],axis=1) - p)
+                    
+                    respMatMouse[region][clust][sessionType][imgSet].append(np.zeros((8,8)))
+                    respMat[region][clust][sessionType][imgSet].append(np.zeros((len(d['decodeWindows']),8,8)))
+                    for i,preImg in enumerate(images[imgSet]):
+                        for j,chImg in enumerate(images[imgSet]):
+                            m = (d['imageName'][c-1]==preImg) & (d['imageName'][c]==chImg)
+                            respMatMouse[region][clust][sessionType][imgSet][-1][i,j] = np.mean(d['lick'][c][m])
+                            for k in range(len(d['decodeWindows'])):
+                                respMat[region][clust][sessionType][imgSet][-1][k,i,j] = np.mean(pred[k][c][m])
 decodeWindows = d['decodeWindows']
 
 
-fig = plt.figure(figsize=(8,5))
+fig = plt.figure(figsize=(6,10))
 ax = fig.add_subplot(1,1,1)
-for region,clr in zip(regions,regionColors):
-    if len(unitChangeDecoding[region])>0:
-        m = np.mean(unitChangeDecoding[region],axis=0)
-        s = np.std(unitChangeDecoding[region],axis=0)/(len(unitChangeDecoding[region])**0.5)
-        ax.plot(unitDecodingTime,m,color=clr,label=region+' (n='+str(len(unitChangeDecoding[region]))+')')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlim([0,0.75])
-ax.set_ylim([0.45,1])
-ax.set_xlabel('Time from change (s)')
-ax.set_ylabel('Change decoding accuracy')
-ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
-plt.tight_layout()
-
-fig = plt.figure(figsize=(10,4))
-ax = fig.add_subplot(1,1,1)
-m = np.full((len(regions),len(decodeWindows)),np.nan)
-for i,region in enumerate(regions):
-    if len(unitChangeDecoding[region])>0:
-        m[i] = np.mean(unitChangeDecoding[region],axis=0)
+m = np.full((len(regions)*len(clusters),len(decodeWindows)),np.nan)
+lbls = []
+k = 0
+for region in regions:
+    for clust in clusters:
+        if len(unitChangeDecoding[region][clust])>0:
+            m[k] = np.mean(unitChangeDecoding[region][clust],axis=0)
+        lbls.append(region+', '+clust)
+        k += 1
 im = ax.imshow(m,cmap='magma',clim=(0.5,1))
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-xticks = np.arange(4,75,5)
+xticks = np.arange(9,75,10)
 ax.set_xticks(xticks)
 ax.set_xticklabels(decodeWindows[xticks]/1000)
 ax.set_xlabel('Time from change (s)')
+ax.set_yticks(np.arange(len(regions)*len(clusters)))
+ax.set_yticklabels(lbls,rotation=0,ha='right',fontsize=4)
+ax.set_title('Change decoding accuracy')
+cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+plt.tight_layout()
+
+fig = plt.figure(figsize=(6,6))
+ax = fig.add_subplot(1,1,1)
+m = np.full((len(regions),len(clusters)),np.nan)
+t = np.where(decodeWindows==150)[0][0]
+for i,region in enumerate(regions):
+    for j,clust in enumerate(clusters):
+        if len(unitChangeDecoding[region][clust])>0:
+            m[i,j] = np.mean(unitChangeDecoding[region][clust],axis=0)[t]
+im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(np.arange(len(clusters)))
+ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
 ax.set_yticks(np.arange(len(regions)))
 ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
 ax.set_title('Change decoding accuracy')
 cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
 plt.tight_layout()
+
 
 
 fig = plt.figure(figsize=(8,5))
@@ -433,7 +535,7 @@ for side in ('right','top'):
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xticks(np.arange(len(regions)))
 ax.set_xticklabels([r+' ('+str(b)+')' for r,b in zip(regions,n)],rotation=45)
-ax.set_ylim([0,100])
+ax.set_ylim([0,120])
 ax.set_ylabel('Time to 55% decoding accuracy (ms)')
 plt.tight_layout()
 
@@ -605,7 +707,7 @@ j = -1
 for sessionType in ('familiar','novel'):   
     for imgSet in ('G','H'):
         j += 1
-        for i,(r,lbl) in enumerate(zip([respMatMouseAllSessions]+[respMat[region] for region in regions],('mice',)+regions)):
+        for i,(r,lbl) in enumerate(zip([respMatMouseAllSessions]+[respMat[region] for region in regions],('mice',)+tuple(regions))):
             ax = fig.add_subplot(gs[i,j])
             r = r[sessionType][imgSet]
             if i>0:
