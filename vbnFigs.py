@@ -261,71 +261,83 @@ plt.tight_layout()
 
 
 # unit lick decoding
-regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-           'Hipp','APN','NOT','SC','MRN','MB',
-           'SC/MRN cluster 1','SC/MRN cluster 2')
-regions = ['cluster '+str(c) for c in range(15)]
-regionColors = plt.cm.tab20(np.linspace(0,1,len(regions)))
+regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+           'Hipp','APN','NOT','SC','MRN','MB')
+clusters = ['all'] + ['cluster '+str(c+1) for c in range(15)]
 
 unitSampleSize = np.array([1,5,10,15,20,25,30,40,50,60])
-decodeWindowSampleSize = 20
+decodeWindowSampleSize = 10
+unitSampleDecodeWindow = 750
 
-unitLickDecoding = {region: [] for region in regions}
-lickDecodingSampleSize = {region: [] for region in regions}
+unitLickDecoding = {region: {clust: [] for clust in clusters} for region in regions}
+lickDecodingSampleSize = {region: {clust: [] for clust in clusters} for region in regions}
 for i,f in enumerate(glob.glob(os.path.join(outputDir,'unitLickDecoding','unitLickDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
         for region in regions:
-            a = d[region][decodeWindowSampleSize]['balancedAccuracy']
-            if len(a)>0:
-                unitLickDecoding[region].append(a)
-                
-            lickDecodingSampleSize[region].append([])
-            for sampleSize in unitSampleSize:
-                a = d[region][sampleSize]['balancedAccuracy']
-                if len(a) > 0:
-                    lickDecodingSampleSize[region][-1].append(a[-1])
-                else:
-                    lickDecodingSampleSize[region][-1].append(np.nan)
+            for clust in clusters:
+                a = d[region][clust][decodeWindowSampleSize]['balancedAccuracy']
+                if len(a)>0:
+                    unitLickDecoding[region][clust].append(a)
+                    
+                lickDecodingSampleSize[region][clust].append([])
+                for sampleSize in unitSampleSize:
+                    a = d[region][clust][sampleSize]['balancedAccuracy']
+                    if len(a) > 0:
+                        lickDecodingSampleSize[region][clust][-1].append(a[-1])
+                    else:
+                        lickDecodingSampleSize[region][clust][-1].append(np.nan)
 decodeWindows = d['decodeWindows']
 unitDecodingTime = (decodeWindows - decodeWindows[0]/2) / 1000
             
-fig = plt.figure(figsize=(8,5))
-ax = fig.add_subplot(1,1,1)
-for region,clr in zip(regions,regionColors):
-    if len(unitLickDecoding[region])>0:
-        m = np.mean(unitLickDecoding[region],axis=0)
-        s = np.std(unitLickDecoding[region],axis=0)/(len(unitLickDecoding[region])**0.5)
-        ax.plot(unitDecodingTime,m,color=clr,label=region+' (n='+str(len(unitLickDecoding[region]))+')')
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_ylim([0.45,1])
-ax.set_xlabel('Time from non-change flash onset (s)')
-ax.set_ylabel('Lick decoding balanced accuracy')
-ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
-plt.tight_layout()
 
-fig = plt.figure(figsize=(10,4))
+fig = plt.figure(figsize=(6,10))
 ax = fig.add_subplot(1,1,1)
-m = np.full((len(regions),len(decodeWindows)),np.nan)
-for i,region in enumerate(regions):
-    if len(unitLickDecoding[region])>0:
-        m[i] = np.mean(unitLickDecoding[region],axis=0)
+m = np.full((len(regions)*len(clusters),len(decodeWindows)),np.nan)
+lbls = []
+k = 0
+for region in regions:
+    for clust in clusters:
+        if len(unitLickDecoding[region][clust])>0:
+            m[k] = np.mean(unitLickDecoding[region][clust],axis=0)
+        lbls.append(region+', '+clust)
+        k += 1
 im = ax.imshow(m,cmap='magma',clim=(0.5,1))
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-xticks = np.arange(4,75,5)
+xticks = np.arange(9,75,10)
 ax.set_xticks(xticks)
 ax.set_xticklabels(decodeWindows[xticks]/1000)
 ax.set_xlabel('Time from change (s)')
+ax.set_yticks(np.arange(len(regions)*len(clusters)))
+ax.set_yticklabels(lbls,rotation=0,ha='right',fontsize=4)
+ax.set_title('Lick decoding balanced accuracy')
+cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+plt.tight_layout()
+
+
+fig = plt.figure(figsize=(6,6))
+ax = fig.add_subplot(1,1,1)
+m = np.full((len(regions),len(clusters)),np.nan)
+t = np.where(decodeWindows==150)[0][0]
+for i,region in enumerate(regions):
+    for j,clust in enumerate(clusters):
+        if len(unitLickDecoding[region][clust])>0:
+            m[i,j] = np.mean(unitLickDecoding[region][clust],axis=0)[t]
+im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(np.arange(len(clusters)))
+ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
 ax.set_yticks(np.arange(len(regions)))
 ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
 ax.set_title('Lick decoding balanced accuracy')
 cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
 plt.tight_layout()
+
 
 fig = plt.figure(figsize=(8,5))
 ax = fig.add_subplot(1,1,1)
