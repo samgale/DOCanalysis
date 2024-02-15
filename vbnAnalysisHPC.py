@@ -240,7 +240,6 @@ def decodeChange(sessionId):
     trainOnFlashesWithLicks = True
     useResponsiveUnits = False
 
-    model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
     decodeWindowSize = 10
@@ -408,12 +407,10 @@ def decodeChange(sessionId):
 
 
 def pooledDecoding(label,region,cluster):
-    model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
-    nCrossVal = 5
     decodeWindowSize = 10
     decodeWindowEnd = 750
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
-    minFlashes = 10
+    minFlashes = 20
     unitSampleSize = 20
     nUnitSamples = 100
     nPseudoFlashes = 100
@@ -459,16 +456,31 @@ def pooledDecoding(label,region,cluster):
     accuracy = np.zeros((nUnitSamples,len(decodeWindows)))
     warnings.filterwarnings('ignore')
     for i,unitSamp in enumerate(unitSamples):
-        pseudoGo = np.zeros((unitSampleSize,nPseudoFlashes,len(decodeWindows)))
-        pseudoNogo = pseudoGo.copy()
+        pseudoGoTrain = np.zeros((unitSampleSize,nPseudoFlashes,len(decodeWindows)))
+        pseudoGoTest = pseudoGoTrain.copy()
+        pseudoNogoTrain = pseudoGoTrain.copy()
+        pseudoNogoTest = pseudoGoTrain.copy()
         for k,(s,u) in enumerate(unitIndex[unitSamp]):
-            pseudoGo[k] = goSpikes[s][u,np.random.choice(goSpikes[s].shape[1],nPseudoFlashes)]
-            pseudoNogo[k] = nogoSpikes[s][u,np.random.choice(nogoSpikes[s].shape[1],nPseudoFlashes)]
-        pseudoData = np.concatenate((pseudoGo,pseudoNogo),axis=1)
+            n = goSpikes[s].shape[1]
+            r = np.random.permutation(n)
+            train = r[n//2:]
+            test = r[:n//2]
+            pseudoGoTrain[k] = goSpikes[s][u,np.random.choice(train,nPseudoFlashes,replace=True)]
+            pseudoGoTest[k] = goSpikes[s][u,np.random.choice(test,nPseudoFlashes,replace=True)]
+            n = nogoSpikes[s].shape[1]
+            r = np.random.permutation(n)
+            train = r[n//2:]
+            test = r[:n//2]
+            pseudoNogoTrain[k] = nogoSpikes[s][u,np.random.choice(train,nPseudoFlashes,replace=True)]
+            pseudoNogoTest[k] = nogoSpikes[s][u,np.random.choice(test,nPseudoFlashes,replace=True)]
+        pseudoFlashTrain = np.concatenate((pseudoGoTrain,pseudoNogoTrain),axis=1)
+        pseudoFlashTest = np.concatenate((pseudoGoTest,pseudoNogoTest),axis=1)
         for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
-            X = pseudoData[:,:,:winEnd].transpose(1,0,2).reshape((nPseudoFlashes*2,-1))
-            cv = trainDecoder(model,X,y,nCrossVal)
-            accuracy[i,j] = np.mean(cv['test_score']) 
+            Xtrain = pseudoFlashTrain[:,:,:winEnd].transpose(1,0,2).reshape((nPseudoFlashes*2,-1))
+            Xtest = pseudoFlashTest[:,:,:winEnd].transpose(1,0,2).reshape((nPseudoFlashes*2,-1))
+            decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
+            decoder.fit(Xtrain,y)
+            accuracy[i,j] = decoder.score(Xtest,y) 
     warnings.filterwarnings('default')
 
     dirName = 'pooledChangeDecoding' if label == 'change' else 'pooledLickDecoding'
