@@ -136,7 +136,7 @@ def findResponsiveUnits(basePsth,respPsth,baseWin,respWin):
     return hasSpikes & hasPeakResp & (pval<0.05)
 
 
-def getUnitSamples(sampleSize,nUnits):
+def getUnitSamples(sampleSize,nUnits,maxSamples=None):
     if sampleSize>1:
         if sampleSize==nUnits:
             nSamples = 1
@@ -144,6 +144,8 @@ def getUnitSamples(sampleSize,nUnits):
         else:
             # >99% chance each neuron is chosen at least once
             nSamples = int(math.ceil(math.log(0.01)/math.log(1-sampleSize/nUnits)))
+            if maxSamples is not None and nSamples > maxSamples:
+                nSamples = maxSamples
             unitSamples = [np.random.choice(nUnits,sampleSize,replace=False) for _ in range(nSamples)]
     else:
         nSamples = nUnits

@@ -187,13 +187,13 @@ def decodeLicksFromUnits(sessionId):
     warnings.filterwarnings('ignore')
     for region in regions:
         inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
-        for clustId,cluster in enumerate(clusters):
-            unitsToUse = inRegion if clustId==0 else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustId)
+        for clustNum,cluster in enumerate(clusters):
+            unitsToUse = inRegion if cluster=='all' else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustNum-1)
             nUnits = unitsToUse.sum()
-            if nUnits < 0:
+            if nUnits < 1:
                 continue
                 
-            sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
+            sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
             for i,u in enumerate(np.where(unitsToUse)[0]):
                 sp[i]=spikes[u,:,:]
             
@@ -316,10 +316,10 @@ def decodeChange(sessionId):
     warnings.filterwarnings('ignore')
     for region in regions:
         inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
-        for clustId,cluster in enumerate(clusters):
-            unitsToUse = inRegion if clustId==0 else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustId)
+        for clustNum,cluster in enumerate(clusters):
+            unitsToUse = inRegion if cluster=='all' else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustNum-1)
             nUnits = unitsToUse.sum()
-            if nUnits < 0:
+            if nUnits < 1:
                 continue
                 
             sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
@@ -351,7 +351,7 @@ def decodeChange(sessionId):
                     for unitSamp in unitSamples:
                         # get train/test sets
                         if np.any(novelFlashes):
-                            # balance novel and familiar changes
+                            # balance novel and familiar flashes
                             train = []
                             test = []
                             for i in (novelFlashes,~novelFlashes):
@@ -362,8 +362,6 @@ def decodeChange(sessionId):
                                 test.append(ts)
                             trainInd = [list(i)+list(j) for i,j in zip(*train)]
                             testInd = [list(i)+list(j) for i,j in zip(*test)]
-                        else:
-                            trainInd,testInd = getTrainTestSplits(y,nCrossVal)
                         # use all train/test sets as training set for all other flashes
                         trainInd.append(np.where(~np.isnan(y))[0])
                         testInd.append(np.where(np.isnan(y))[0])
@@ -407,6 +405,74 @@ def decodeChange(sessionId):
     warnings.filterwarnings('default')
 
     np.save(os.path.join(outputDir,'unitChangeDecoding','unitChangeDecoding_'+str(sessionId)+'.npy'),d)
+
+
+def pooledDecoding(label,region,cluster):
+    model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
+    nCrossVal = 5
+    decodeWindowSize = 10
+    decodeWindowEnd = 750
+    decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
+    minFlashes = 10
+    unitSampleSize = 20
+    nUnitSamples = 100
+    nPseudoFlashes = 100
+
+    goSpikes = [] # binned spikes for all go flashes (decoder=1) for each session with neurons in region and cluster
+    nogoSpikes = [] # binned spikes for all nogo flashes (decoder=0)
+    unitIndex = [] # nUnits x (session, unit in session)
+    sessionIndex = 0
+    for sessionId in stimTable['session_id'].unique():
+        stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+        flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+        if label == 'change':
+            goInd = changeFlashes & lick
+            nogoInd = nonChangeFlashes & lick
+        elif label == 'lick':
+            goInd = nonChangeFlashes & lick
+            nogoInd = nonChangeFlashes & ~lick
+        if goInd.sum() < minFlashes or nogoInd.sum() < minFlashes:
+            continue
+
+        units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+        qualityUnits = apply_unit_quality_filter(units)
+        inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
+        unitsToUse = inRegion if cluster=='all' else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],int(cluster[cluster.find('_')+1:])-1)
+        nUnits = unitsToUse.sum()
+        if nUnits < 1:
+            continue
+        spikes = unitData[str(sessionId)]['spikes']     
+        sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(unitsToUse)[0]):
+            sp[i] = spikes[u,:,:]
+        goSpikes.append(sp[:,goInd,:decodeWindows[-1]].reshape((nUnits,goInd.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1))
+        nogoSpikes.append(sp[:,nogoInd,:decodeWindows[-1]].reshape((nUnits,nogoInd.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)) 
+        unitIndex.append(np.stack((np.full(nUnits,sessionIndex),np.arange(nUnits))).T)
+        sessionIndex += 1
+    if sum(len(i) for i in unitIndex) < unitSampleSize:
+        return
+    unitIndex = np.concatenate(unitIndex)
+
+    unitSamples = [np.random.choice(unitIndex.shape[0],unitSampleSize,replace=False) for _ in range(nUnitSamples)]
+    y = np.zeros(nPseudoFlashes*2)
+    y[:nPseudoFlashes] = 1
+    accuracy = np.zeros((nUnitSamples,len(decodeWindows)))
+    warnings.filterwarnings('ignore')
+    for i,unitSamp in enumerate(unitSamples):
+        pseudoGo = np.zeros((unitSampleSize,nPseudoFlashes,len(decodeWindows)))
+        pseudoNogo = pseudoGo.copy()
+        for k,(s,u) in enumerate(unitIndex[unitSamp]):
+            pseudoGo[k] = goSpikes[s][u,np.random.choice(goSpikes[s].shape[1],nPseudoFlashes)]
+            pseudoNogo[k] = nogoSpikes[s][u,np.random.choice(nogoSpikes[s].shape[1],nPseudoFlashes)]
+        pseudoData = np.concatenate((pseudoGo,pseudoNogo),axis=1)
+        for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
+            X = pseudoData[:,:,:winEnd].transpose(1,0,2).reshape((nPseudoFlashes*2,-1))
+            cv = trainDecoder(model,X,y,nCrossVal)
+            accuracy[i,j] = np.mean(cv['test_score']) 
+    warnings.filterwarnings('default')
+
+    dirName = 'pooledChangeDecoding' if label == 'change' else 'pooledLickDecoding'
+    np.save(os.path.join(outputDir,dirName,dirName+'_'+region+'_'+cluster+'.npy'),accuracy)
 
 
 def fitIntegratorModel(sessionId):
@@ -648,11 +714,19 @@ def fitIntegratorModel(sessionId):
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--sessionId',type=int)
+    
+    # parser.add_argument('--sessionId',type=int)
+    # args = parser.parse_args()
+    # sessionId = args.sessionId
+    # # runFacemap(sessionId)
+    # # decodeLicksFromFacemap(sessionId)
+    # # decodeLicksFromUnits(sessionId)
+    # # decodeChange(sessionId)
+    # # fitIntegratorModel(sessionId)
+
+    parser.add_argument('--label',type=str)
+    parser.add_argument('--region',type=str)
+    parser.add_argument('--cluster',type=str)
     args = parser.parse_args()
-    sessionId = args.sessionId
-    # runFacemap(sessionId)
-    # decodeLicksFromFacemap(sessionId)
-    # decodeLicksFromUnits(sessionId)
-    decodeChange(sessionId)
-    # fitIntegratorModel(sessionId)
+    pooledDecoding(args.label,args.region,args.cluster)
+
