@@ -36,8 +36,8 @@ novelSessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'
 
 # number of neurons per region/cluster
 regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-           'Hipp','APN','NOT','SC','MRN','MB')
-clusters = ['all'] + ['cluster '+str(c+1) for c in range(15)]
+           'Hipp','APN','SC','MRN','MB')
+clusters = ['all'] + ['cluster '+str(c+1) for c in range(15) if c!=3]
 
 
 nUnits = {region: {clust: [] for clust in clusters} for region in regions}
@@ -78,7 +78,7 @@ for i,region in enumerate(regions):
             ax.set_title(clust,fontsize=8)
 plt.tight_layout()
 
-fig = plt.figure()
+fig = plt.figure(figsize=(6,6))
 ax = fig.add_subplot(1,1,1)
 n = np.zeros((len(regions)-1,len(clusters)-1))
 for i,region in enumerate(regions[1:]):
@@ -91,7 +91,7 @@ for side in ('right','top'):
 ax.tick_params(direction='out',top=False,right=False)
 xticks = np.arange(len(clusters)-1)
 ax.set_xticks(xticks)
-ax.set_xticklabels(xticks+1)
+ax.set_xticklabels([c[c.find(' ')+1:] for c in clusters[1:]])
 ax.set_xlabel('Cluster')
 ax.set_yticks(np.arange(len(regions)-1))
 ax.set_yticklabels(regions[1:],rotation=0,ha='right')
@@ -258,6 +258,161 @@ ax.set_ylim([0.45,1])
 ax.set_xlabel('Time from non-change flash onset (ms)')
 ax.set_ylabel('Lick decoding balanced accuracy')
 plt.tight_layout()
+
+
+# pooled sessions change and lick decoding
+labels = ('change','lick')
+regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+           'Hipp','APN','SC','MRN','MB')
+clusters = ['all'] + ['cluster '+str(c+1) for c in range(15) if c!=3]
+decodeWindows = np.arange(10,751,10)
+
+accuracy = {lbl: {region: {clust: np.full(len(decodeWindows),np.nan) for clust in clusters} for region in regions} for lbl in labels}
+for lbl in labels:
+    baseName = 'pooledChangeDecoding' if lbl=='change' else 'pooledLickDecoding'
+    for f in glob.glob(os.path.join(outputDir,baseName,baseName+'_*.npy')):
+        s = os.path.splitext(os.path.basename(f))[0].split('_')
+        region,clust = (s[1:]) if len(s)==3 else (s[1],s[3])
+        if clust != 'all':
+            clust = 'cluster '+clust
+        if region in regions and clust in clusters:
+            accuracy[lbl][region][clust] = np.mean(np.load(f),axis=0)
+
+latency = {lbl: {region: {clust: np.nan for clust in clusters} for region in regions} for lbl in labels}
+dt = 0.1
+for lbl in labels:
+    for region in regions:
+        for clust in clusters:
+            a = accuracy[lbl][region][clust]
+            latThresh = 0.5 * (a.max() - a.min()) + a.min()
+            lat = np.where(np.interp(np.arange(0,decodeWindows[-1],dt),decodeWindows,a) > latThresh)[0]
+            if len(lat) > 0:
+                latency[lbl][region][clust] = lat[0] * dt
+
+
+for lbl in labels:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for i,region in enumerate(regions):
+        for j,clust in enumerate(clusters):
+            ax.plot(decodeWindows,accuracy[lbl][region][clust],'k',alpha=0.2)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,750])
+    ax.set_ylim([0.45,1])
+    ax.set_xlabel('Time from change (ms)')
+    ax.set_ylabel(lbl+' decoding accuracy')
+    ax.set_title('all regions/clusters')
+    plt.tight_layout()
+
+for lbl in labels:
+    fig = plt.figure(figsize=(6,10))
+    ax = fig.add_subplot(1,1,1)
+    m = np.full((len(regions)*len(clusters),len(decodeWindows)),np.nan)
+    ylbls = []
+    k = 0
+    for region in regions:
+        for clust in clusters:
+            m[k] = accuracy[lbl][region][clust]
+            ylbls.append(region+', '+clust)
+            k += 1
+    im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    xticks = np.arange(9,75,10)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(decodeWindows[xticks])
+    ax.set_xlabel('Time from change (ms)')
+    ax.set_yticks(np.arange(len(regions)*len(clusters)))
+    ax.set_yticklabels(ylbls,rotation=0,ha='right',fontsize=4)
+    ax.set_ylabel('Region/cluster')
+    ax.set_title(lbl+' decoding accuracy')
+    cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+    plt.tight_layout()
+
+for lbl,t in zip(labels,(100,200)):
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(1,1,1)
+    m = np.full((len(regions),len(clusters)),np.nan)
+    for i,region in enumerate(regions):
+        for j,clust in enumerate(clusters):
+            m[i,j] = accuracy[lbl][region][clust][np.where(decodeWindows==t)[0][0]]
+    im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(np.arange(len(clusters)))
+    ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
+    ax.set_yticks(np.arange(len(regions)))
+    ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
+    ax.set_title(lbl+' decoding accuracy at '+str(t)+' ms')
+    cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+    plt.tight_layout()
+    
+for lbl in labels:
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(1,1,1)
+    m = np.full((len(regions),len(clusters)),np.nan)
+    for i,region in enumerate(regions):
+        for j,clust in enumerate(clusters):
+            m[i,j] = latency[lbl][region][clust]
+    im = ax.imshow(m,cmap='magma_r',clim=(50,500))
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(np.arange(len(clusters)))
+    ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
+    ax.set_yticks(np.arange(len(regions)))
+    ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
+    ax.set_title(lbl+' decoding latency (ms)')
+    cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+    plt.tight_layout()
+    
+for lbl,cmin in zip(labels,(50,100)):
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(1,1,1)
+    m = np.full((len(regions),len(clusters)),np.nan)
+    for i,region in enumerate(regions):
+        for j,clust in enumerate(clusters):
+            m[i,j] = np.log10(latency[lbl][region][clust])
+    im = ax.imshow(m,cmap='magma_r',clim=np.log10([cmin,500]))
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(np.arange(len(clusters)))
+    ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
+    ax.set_yticks(np.arange(len(regions)))
+    ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
+    ax.set_title(lbl+' decoding latency (ms; scaled)')
+    cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+    cbTicks = np.arange(cmin,500,50)
+    cb.set_ticks(np.log10(cbTicks))
+    cb.set_ticklabels(cbTicks)
+    plt.tight_layout()
+
+for lbl in labels:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for i,region in enumerate(regions[1:]):
+        for j,clust in enumerate(clusters[1:]):
+            lat = latency[lbl][region][clust]
+            acc = np.nanmax(accuracy[lbl][region][clust])
+            ax.plot(lat,acc,'ko',mfc='none')
+            if ((lbl == 'change' and acc > 0.81 and acc < 0.84 and lat < 100) or 
+                (lbl == 'lick' and acc > 0.9 and lat > 80 and lat < 100)):
+                print(lbl,region,clust,lat,acc)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,500])
+    ax.set_ylim([0.5,1])
+    ax.set_xlabel(lbl+' decoding latency')
+    ax.set_ylabel('max '+lbl+' decoding accuracy')
+    plt.tight_layout()
+
+
 
 
 # unit lick decoding
