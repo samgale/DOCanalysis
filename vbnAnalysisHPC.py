@@ -428,6 +428,9 @@ def pooledDecoding(label,region,cluster):
         elif label == 'lick':
             goInd = nonChangeFlashes & lick
             nogoInd = nonChangeFlashes & ~lick
+        elif label == 'hit':
+            goInd = changeFlashes & lick
+            nogoInd = changeFlashes & ~lick
         if goInd.sum() < minFlashes or nogoInd.sum() < minFlashes:
             continue
 
@@ -483,7 +486,12 @@ def pooledDecoding(label,region,cluster):
             accuracy[i,j] = decoder.score(Xtest,y) 
     warnings.filterwarnings('default')
 
-    dirName = 'pooledChangeDecoding' if label == 'change' else 'pooledLickDecoding'
+    if label == 'change':
+        dirName = 'pooledChangeDecoding'
+    elif label == 'lick':
+        dirName = 'pooledLickDecoding'
+    elif label == 'hit':
+        dirName = 'pooledHitDecoding'
     np.save(os.path.join(outputDir,dirName,dirName+'_'+region+'_'+cluster+'.npy'),accuracy)
 
 
