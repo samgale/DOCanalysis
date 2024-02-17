@@ -261,7 +261,7 @@ plt.tight_layout()
 
 
 # pooled sessions change and lick decoding
-labels = ('change','lick')
+labels = ('change','lick','hit')
 regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
            'Hipp','APN','SC','MRN','MB')
 clusters = ['all'] + ['cluster '+str(c+1) for c in range(15) if c!=3]
@@ -269,7 +269,12 @@ decodeWindows = np.arange(10,751,10)
 
 accuracy = {lbl: {region: {clust: np.full(len(decodeWindows),np.nan) for clust in clusters} for region in regions} for lbl in labels}
 for lbl in labels:
-    baseName = 'pooledChangeDecoding' if lbl=='change' else 'pooledLickDecoding'
+    if lbl=='change':
+        baseName = 'pooledChangeDecoding'
+    elif lbl=='lick':
+        baseName = 'pooledLickDecoding'
+    elif lbl=='hit':
+        baseName = 'pooledHitDecoding'
     for f in glob.glob(os.path.join(outputDir,baseName,baseName+'_*.npy')):
         s = os.path.splitext(os.path.basename(f))[0].split('_')
         region,clust = (s[1:]) if len(s)==3 else (s[1],s[3])
@@ -370,7 +375,7 @@ for lbl in labels:
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
     
-for lbl,cmin in zip(labels,(50,100)):
+for lbl,cmin in zip(labels,(50,100,50)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
     m = np.full((len(regions),len(clusters)),np.nan)
@@ -400,8 +405,9 @@ for lbl in labels:
             lat = latency[lbl][region][clust]
             acc = np.nanmax(accuracy[lbl][region][clust])
             ax.plot(lat,acc,'ko',mfc='none')
-            if ((lbl == 'change' and acc > 0.81 and acc < 0.84 and lat < 100) or 
-                (lbl == 'lick' and acc > 0.9 and lat > 80 and lat < 100)):
+            if ((lbl == 'change' and acc > 0.81 and acc < 0.99 and lat > 80 and lat < 100) or 
+                (lbl == 'lick' and acc > 0.9 and lat > 80 and lat < 100) or
+                (lbl == 'hit' and acc > 0.7 and lat < 100)):
                 print(lbl,region,clust,lat,acc)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
