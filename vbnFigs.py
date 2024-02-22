@@ -10,6 +10,7 @@ import glob
 import os
 import numpy as np
 import pandas as pd
+import scipy.stats
 import h5py
 import matplotlib
 import matplotlib.pyplot as plt
@@ -22,7 +23,7 @@ baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\s
 
 outputDir = r'\\allen\programs\mindscope\workgroups\np-behavior\VBN_video_analysis'
 
-stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_table.csv'))
+stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_with_mouse_id.csv'))
 
 unitTable = pd.read_csv(os.path.join(baseDir,'master_unit_table.csv'))
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
@@ -32,6 +33,11 @@ clusterTable = pd.read_csv(os.path.join(baseDir,'unit_cluster_labels.csv'))
 sessionIds = stimTable['session_id'].unique()
 novelSessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
 
+mouseIds = stimTable['mouse_id'].unique()
+
+images = {'G': ('im012_r','im036_r','im044_r','im047_r','im078_r','im115_r','im083_r','im111_r'),
+          'H': ('im005_r','im024_r','im034_r','im087_r','im104_r','im114_r','im083_r','im111_r')}
+holdoverImages = ('im083_r','im111_r')
 
 
 # number of neurons per region/cluster
@@ -177,34 +183,217 @@ plt.tight_layout()
 
 
 # lick latency
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-lickLatBins = np.arange(0,0.751,1/60)
-lickLatTime = lickLatBins[:-1]+0.5/60
-cumProbLick = []
+lbls = ('change','non-change','familiar change','novel change','familiar non-change','novel non-change','familiar holdover change','novel holdover change')
+lickProb = {lbl: [] for lbl in lbls}
+nFlashes = {lbl: [] for lbl in lbls}
+lickLatency = {lbl: [] for lbl in lbls}
 for sessionId in sessionIds:
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
     if lick[nonChangeFlashes].sum() >= 10:
-        lickLatency = (lickTimes - flashTimes)[nonChangeFlashes & lick]
-        dsort = np.sort(lickLatency)
+        lat = lickTimes - flashTimes
+        lickProb['change'].append(np.sum(changeFlashes & lick)/np.sum(changeFlashes))
+        lickProb['non-change'].append(np.sum(nonChangeFlashes & lick)/np.sum(nonChangeFlashes))
+        nFlashes['change'].append(np.sum(changeFlashes))
+        nFlashes['non-change'].append(np.sum(nonChangeFlashes))
+        lickLatency['change'].append(lat[changeFlashes & lick])
+        lickLatency['non-change'].append(lat[nonChangeFlashes & lick])
+        if np.any(novelFlashes):
+            lickProb['familiar change'].append(np.sum(changeFlashes & ~novelFlashes & lick)/np.sum(changeFlashes & ~novelFlashes))
+            lickProb['familiar non-change'].append(np.sum(nonChangeFlashes & ~novelFlashes & lick)/np.sum(nonChangeFlashes & ~novelFlashes))
+            nFlashes['familiar change'].append(np.sum(changeFlashes & ~novelFlashes))
+            nFlashes['familiar non-change'].append(np.sum(nonChangeFlashes & ~novelFlashes))
+            lickLatency['familiar change'].append(lat[changeFlashes & ~novelFlashes & lick])
+            lickLatency['familiar non-change'].append(lat[nonChangeFlashes & ~novelFlashes & lick])
+            lickProb['novel change'].append(np.sum(changeFlashes & novelFlashes & lick)/np.sum(changeFlashes & novelFlashes))
+            lickProb['novel non-change'].append(np.sum(nonChangeFlashes & novelFlashes & lick)/np.sum(nonChangeFlashes & novelFlashes))
+            nFlashes['novel change'].append(np.sum(changeFlashes &~novelFlashes))
+            nFlashes['novel non-change'].append(np.sum(nonChangeFlashes & novelFlashes))
+            lickLatency['novel change'].append(lat[changeFlashes & novelFlashes & lick])
+            lickLatency['novel non-change'].append(lat[nonChangeFlashes & novelFlashes & lick])
+            
+for m in mouseIds:
+    fam = stimTable[(stimTable['mouse_id']==m) & (stimTable['experience_level']=='Familiar') & stimTable['active']].reset_index()
+    nov = stimTable[(stimTable['mouse_id']==m) & (stimTable['experience_level']=='Novel') & stimTable['active']].reset_index()
+    if len(fam) > 0 and len(nov) > 0:
+        for stim,lbl in zip((fam,nov),('familiar','novel')):
+            flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+            holdover = np.in1d(stim['image_name'],holdoverImages)
+            lickProb[lbl+' holdover change'].append(np.sum(changeFlashes & holdover & lick)/np.sum(changeFlashes & holdover))
+            nFlashes[lbl+' holdover change'].append(np.sum(changeFlashes & holdover))
+            lickLatency[lbl+' holdover change'].append((lickTimes-flashTimes)[nonChangeFlashes & holdover & lick])
+
+    
+    
+    
+for lbl in ('change','non-change'):
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    lickLatBins = np.arange(0,0.751,1/60)
+    lickLatTime = lickLatBins[:-1]+0.5/60
+    cumProbLick = []
+    for lat in lickLatency[lbl]:
+        dsort = np.sort(lat)
         cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
         ax.plot(dsort,cumProb,'0.5',alpha=0.25)
-        h = np.histogram(lickLatency,lickLatBins)[0]
+        h = np.histogram(lat,lickLatBins)[0]
         cumProbLick.append(np.cumsum(h)/np.sum(h))
-m = np.mean(cumProbLick,axis=0)
-s = np.std(cumProbLick,axis=0)/(len(cumProbLick)**0.5)
-ax.plot(lickLatTime,m,color='k',lw=2)
-ax.fill_between(lickLatTime,m+s,m-s,color='k',alpha=0.25)
+    m = np.mean(cumProbLick,axis=0)
+    s = np.std(cumProbLick,axis=0)/(len(cumProbLick)**0.5)
+    ax.plot(lickLatTime,m,color='k',lw=2)
+    ax.fill_between(lickLatTime,m+s,m-s,color='k',alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,0.75])
+    ax.set_ylim([0,1.01])
+    ax.set_xlabel('Lick latency (s)')
+    ax.set_ylabel('Cumulative probability')
+    ax.set_title(lbl)
+    plt.tight_layout()
+    
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['change']]
+y = [np.nanmean(lat) for lat in lickLatency['non-change']]
+ax.plot([0,0.75],[0,0.75],'k--')
+ax.plot(x,y,'ko')
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
 ax.set_xlim([0,0.75])
-ax.set_ylim([0,1.01])
-ax.set_xlabel('Lick latency (s)')
-ax.set_ylabel('Cumulative probability')
+ax.set_ylim([0,0.75])
+ax.set_aspect('equal')
+ax.set_xlabel('Change lick latency (s)')
+ax.set_ylabel('Non-change lick latency (s)')
 plt.tight_layout()
-    
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['familiar change']]
+y = [np.nanmean(lat) for lat in lickLatency['novel change']]
+ax.plot([0,0.75],[0,0.75],'k--')
+ax.plot(x,y,'ko')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([0,0.75])
+ax.set_aspect('equal')
+ax.set_xlabel('Familiar change lick latency (s)')
+ax.set_ylabel('Novel change lick latency (s)')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['familiar non-change']]
+y = [np.nanmean(lat) for lat in lickLatency['novel non-change']]
+ax.plot([0,0.75],[0,0.75],'k--')
+ax.plot(x,y,'ko')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([0,0.75])
+ax.set_aspect('equal')
+ax.set_xlabel('Familiar non-change lick latency (s)')
+ax.set_ylabel('Novel non-change lick latency (s)')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['familiar holdover change']]
+y = [np.nanmean(lat) for lat in lickLatency['novel holdover change']]
+ax.plot([0,0.75],[0,0.75],'k--')
+ax.plot(x,y,'ko')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([0,0.75])
+ax.set_aspect('equal')
+ax.set_xlabel('Familiar holdover change lick latency (s)')
+ax.set_ylabel('Novel holdover change lick latency (s)')
+plt.tight_layout()
+
+
+def calcDprime(hitRate,falseAlarmRate,goTrials,nogoTrials):
+        hr = adjustResponseRate(hitRate,goTrials)
+        far = adjustResponseRate(falseAlarmRate,nogoTrials)
+        z = [scipy.stats.norm.ppf(r) for r in (hr,far)]
+        return z[0]-z[1]
+
+def adjustResponseRate(r,n):
+    if r == 0:
+        r = 0.5/n
+    elif r == 1:
+        r = 1 - 0.5/n
+    return r
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [calcDprime(hr,far,go,nogo) for hr,far,go,nogo in zip(lickProb['change'],lickProb['non-change'],nFlashes['change'],nFlashes['non-change'])]
+y = [np.nanmean(go) - np.nanmean(nogo) for go,nogo in zip(lickLatency['change'],lickLatency['non-change'])]
+ax.plot(x,y,'ko')
+slope,yint,rval,pval,stderr = scipy.stats.linregress(x,y)
+xrng = np.array([min(x),max(x)])
+plt.plot(xrng,slope*xrng+yint,'--',color='k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('d\' change vs non-change')
+ax.set_ylabel(r'$\Delta$ latency (change - non-change, s)')
+ax.set_title('r='+str(round(rval,2))+', p='+str(round(pval,2)))
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [calcDprime(hr,far,go,nogo) for hr,far,go,nogo in zip(lickProb['novel change'],lickProb['familiar change'],nFlashes['novel change'],nFlashes['familiar change'])]
+y = [np.nanmean(go) - np.nanmean(nogo) for go,nogo in zip(lickLatency['novel change'],lickLatency['familiar change'])]
+ax.plot(x,y,'ko')
+slope,yint,rval,pval,stderr = scipy.stats.linregress(x,y)
+xrng = np.array([min(x),max(x)])
+plt.plot(xrng,slope*xrng+yint,'--',color='k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('d\' novel vs familiar change')
+ax.set_ylabel(r'$\Delta$ latency (novel - familiar, s)')
+ax.set_title('r='+str(round(rval,2))+', p='+str(round(pval,2)))
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['familiar change']]
+y = [np.nanmean(go) - np.nanmean(nogo) for go,nogo in zip(lickLatency['novel change'],lickLatency['familiar change'])]
+ax.plot(x,y,'ko')
+slope,yint,rval,pval,stderr = scipy.stats.linregress(x,y)
+xrng = np.array([min(x),max(x)])
+plt.plot(xrng,slope*xrng+yint,'--',color='k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('Familiar change lick latency (s)')
+ax.set_ylabel(r'$\Delta$ latency (novel - familiar, s)')
+ax.set_title('r='+str(round(rval,2))+', p='+str(round(pval,2)))
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['novel change']]
+y = [np.nanmean(go) - np.nanmean(nogo) for go,nogo in zip(lickLatency['novel change'],lickLatency['familiar change'])]
+ax.plot(x,y,'ko')
+slope,yint,rval,pval,stderr = scipy.stats.linregress(x,y)
+xrng = np.array([min(x),max(x)])
+plt.plot(xrng,slope*xrng+yint,'--',color='k')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlabel('Novel change lick latency (s)')
+ax.set_ylabel(r'$\Delta$ latency (novel - familiar, s)')
+ax.set_title('r='+str(round(rval,2))+', p='+str(round(pval,2)))
+plt.tight_layout()
+
 
 # average frame and weighted mask
 for key in ('avgframe','motMask'):
@@ -1058,8 +1247,7 @@ regions = ('VISall',)
 flashLabels = ('change','preChange','catch','nonChange','omitted','prevOmitted','hit','miss','falseAlarm','correctReject')
 imageTypeLabels = ('all','familiar','familiarNovel','novel')
 imageTypeColors = 'kgm'
-modelLabels = ('all','hit')
-decoderLabels = ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')
+modelLabels = ('hit',)
 
 respMice = {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} for flashes in flashLabels}
 respTimeMice = copy.deepcopy(respMice)
@@ -1071,8 +1259,6 @@ respModel = {region: {flashes: {imgLbl: {modLbl: [] for modLbl in modelLabels} f
 respTimeModel = copy.deepcopy(respModel)
 threshold = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
 leak = copy.deepcopy(threshold)
-wTiming = copy.deepcopy(threshold)
-wNovel = copy.deepcopy(threshold)
 sigma = copy.deepcopy(threshold)
 tauA = copy.deepcopy(threshold)
 tauI = copy.deepcopy(threshold)
@@ -1081,7 +1267,6 @@ novelSession = {region: [] for region in regions}
 trainAccuracy = {region: {modLbl: [] for modLbl in modelLabels} for region in regions}
 trainRespTime = copy.deepcopy(trainAccuracy)
 shuffledAccuracy = copy.deepcopy(trainAccuracy)
-decoderAccuracy = {region: {decoder: [] for decoder in decoderLabels} for region in regions}
 for i,f in enumerate(filePaths):
     print(i)
     with h5py.File(f,'r') as d:
@@ -1104,8 +1289,6 @@ for i,f in enumerate(filePaths):
                     trainRespTime[region][mod].append(d[region]['integratorTrainRespTime'][mod][()])
                     # if mod=='hit':
                     #     shuffledAccuracy[region][mod].append(d[region]['integratorShuffledAccuracy'][mod][()])
-                for decoder in decoderLabels:
-                    decoderAccuracy[region][decoder].append(d[region]['decoderAccuracy'][decoder][()])
                 intgInput = d[region]['integratorInput'][()]
                 intgResp = {mod: d[region]['integratorResp'][mod][()] for mod in modelLabels}
                 intgRt = {mod: d[region]['integratorRespTime'][mod][()] for mod in modelLabels}
@@ -1132,8 +1315,6 @@ for i,f in enumerate(filePaths):
                             if k==0:
                                 threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
                                 leak[region][lbl][mod].append(d[region]['leak'][mod][()])
-                                wTiming[region][lbl][mod].append(d[region]['wTiming'][mod][()])
-                                wNovel[region][lbl][mod].append(d[region]['wNovel'][mod][()])
                                 sigma[region][lbl][mod].append(d[region]['sigma'][mod][()])
                                 tauA[region][lbl][mod].append(d[region]['tauA'][mod][()])
                                 tauI[region][lbl][mod].append(d[region]['tauI'][mod][()])
@@ -1274,7 +1455,7 @@ plt.tight_layout()
 
 # plot model response rate and decision time
 lbls = ('change','catch','nonChange','prevOmitted')
-mod = 'all'
+mod = 'hit'
 
 fig = plt.figure()
 xticks = np.arange(len(lbls))
