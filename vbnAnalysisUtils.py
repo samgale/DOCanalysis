@@ -303,41 +303,64 @@ def cluster(data,nClusters=None,method='ward',metric='euclidean',plot=False,colo
     return clustId,linkageMat
 
 
-def fitAccumulatorBrute(accumulatorInput,pChange,novelFlashes,y,thresholdRange,leakRange):
-    accuracy = np.full((len(thresholdRange),len(leakRange)),np.nan)
-    respTime = accuracy.copy()
+def fitAccumulatorBrute(accumulatorInput,y,lickLatency,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,nonDecisionTimeRange):
+    # accuracy = np.full((len(thresholdRange),len(leakRange),len(tauARange),len(tauIRange),len(alphaIRange),len(nonDecisionTimeRange)),np.nan)
+    # respTime = accuracy.copy()
+    totalError = np.full((len(thresholdRange),len(leakRange),len(tauARange),len(tauIRange),len(alphaIRange),len(nonDecisionTimeRange)),np.nan)
     for i,thresh in enumerate(thresholdRange):
         for j,leak in enumerate(leakRange):
-            resp,rt = runAccumulator(accumulatorInput,pChange,novelFlashes,thresh,leak)[:2]
-            accuracy[i,j] = sklearn.metrics.accuracy_score(y,resp)
-            respTime[i,j] = np.nanmean(rt)                  
+            for k,tauA in enumerate(tauARange):
+                for l,tauI in enumerate(tauIRange):
+                    for m,alphaI in enumerate(alphaIRange):
+                        for n,nonDecisionTime in enumerate(nonDecisionTimeRange):
+                            resp,rt = runAccumulator(accumulatorInput,thresh,leak,tauA,tauI,alphaI)[:2]
+                            # accuracy[i,j] = sklearn.metrics.accuracy_score(y,resp)
+                            # respTime[i,j] = np.nanmean(rt)
+                            respError = abs(np.mean(resp) - np.mean(y)) / np.mean(y)
+                            if not np.any(resp):
+                                respTimeError = 1
+                            else:
+                                meanLat = np.nanmean(lickLatency) * 1000
+                                respTimeError = abs((np.nanmean(rt) + nonDecisionTime) - meanLat) / meanLat 
+                            totalError[i,j,k,l,m,n] = respError + respTimeError          
     # i,j = np.unravel_index(np.argmax(accuracy),accuracy.shape)
     # leakFit = leakRange[j]
     # thresholdFit = thresholdRange[i]
-    i,j = np.where(accuracy==accuracy.max())
-    s = np.stack((i,j))
+    i,j,k,l,m,n = np.where(totalError==totalError.min())
+    s = np.stack((i,j,k,l,m,n))
     s = np.argmin(np.sum((s - np.mean(s,axis=1)[:,None])**2,axis=0)**0.5)
     thresholdFit = thresholdRange[i[s]]
     leakFit = leakRange[j[s]]
-    return thresholdFit,leakFit,accuracy,respTime
+    tauAFit = tauARange[k[s]]
+    tauIFit = tauIRange[l[s]]
+    alphaIFit = alphaIRange[m[s]]
+    nonDecisionTimeFit = nonDecisionTimeRange[n[s]]
+    return thresholdFit,leakFit,tauAFit,tauIFit,alphaIFit,nonDecisionTimeFit
 
 
-def fitAccumulator(accumulatorInput,pChange,novelFlashes,y,thresholdRange,leakRange,sigmaRange):
-    bounds = (thresholdRange,leakRange,sigmaRange)
-    fit = scipy.optimize.direct(evalAccumulator,bounds,args=(accumulatorInput,pChange,novelFlashes,y))
+def fitAccumulator(accumulatorInput,y,lickLatency,thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange,nonDecisionTimeRange):
+    bounds = (thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange,nonDecisionTimeRange)
+    fit = scipy.optimize.direct(evalAccumulator,bounds,args=(accumulatorInput,y,lickLatency))
     params = fit.x
     logLoss = fit.fun
     return params,logLoss
 
 
 def evalAccumulator(params,*args):
-    accumulatorInput,pChange,novelFlashes,y = args
-    prediction = runAccumulator(accumulatorInput,pChange,novelFlashes,*params)[0]
-    logLoss = sklearn.metrics.log_loss(y,prediction)
-    return logLoss
+    accumulatorInput,y,lickLatency = args
+    resp,respTime = runAccumulator(accumulatorInput,*params[:-1])[:2]
+    # logLoss = sklearn.metrics.log_loss(y,resp)
+    respError = abs(np.mean(resp) - np.mean(y)) / np.mean(y)
+    if not np.any(resp):
+        respTimeError = 1
+    else:
+        nonDecisionTime = params[-1]
+        m = np.nanmean(lickLatency) * 1000
+        respTimeError = abs((np.nanmean(respTime) + nonDecisionTime) - m) / m
+    return respError + respTimeError
 
 
-def runAccumulator(accumulatorInput,pChange,novelFlashes,threshold,leak,sigma=0,wTiming=0,wNovel=0,tauA=1,tauI=0,alphaI=0,nReps=20,recordValues=False):
+def runAccumulator(accumulatorInput,threshold,leak,tauA=1,tauI=0,alphaI=0,sigma=0,nReps=10,recordValues=False):
     nReps = nReps if sigma > 0 else 1
     nTrials = len(accumulatorInput)
     resp = np.zeros((nReps,nTrials),dtype=bool)
@@ -347,9 +370,6 @@ def runAccumulator(accumulatorInput,pChange,novelFlashes,threshold,leak,sigma=0,
         if recordValues:
             accumulatorValue.append([])
         for trial,trialInput in enumerate(accumulatorInput):
-            adjustedThresh = threshold * (1 - wTiming * pChange[trial])
-            if (wNovel < 0 and novelFlashes[trial]) or (wNovel > 0 and not novelFlashes[trial]):
-                trialInput = trialInput * (1 - abs(wNovel))
             if recordValues:
                 accumulatorValue[-1].append([])
             a = 0
@@ -359,7 +379,7 @@ def runAccumulator(accumulatorInput,pChange,novelFlashes,threshold,leak,sigma=0,
                 a += (sn + random.gauss(0,sigma) - a*leak) / tauA
                 if tauI > 0:
                     i += (s - i) / tauI
-                if not resp[n,trial] and a > adjustedThresh:
+                if not resp[n,trial] and a > threshold:
                     resp[n,trial] = True
                     respTime[n,trial] = t
                     if not recordValues:

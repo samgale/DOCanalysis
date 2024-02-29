@@ -498,26 +498,34 @@ def pooledDecoding(label,region,cluster):
 def fitIntegratorModel(sessionId):
     regions = ('VISall',)
     layer = None
-    weighted = True
-    bruteFit = False
+    bruteFit = True
     nCrossVal = 5
     nShuffles = 1
     minUnits = 20
     baseWin = slice(680,750)
     respWin = slice(30,100)
-    tEnd = 150
+    tEnd = 200
     binSize = 1
     nBins = int(tEnd/binSize)
-    thresholdRange = (0,15) #np.arange(1,25,1)
-    leakRange = (0,0.25) #np.arange(0.01,0.25,0.01)
-    wTimingRange = np.array([0])
-    wNovelRange = np.array([0])
-    sigmaRange = (0,1.5) #np.array([0]) #np.arange(0,1.1,0.2)
-    tauARange = np.array([0])#(1,150) # np.arange(5,50,5)
-    tauIRange = np.array([0])#(1,150) # np.arange(5,100,10)
-    alphaIRange = np.array([0])#(0.01,1) # np.arange(0.05,0.5,0.05)
+    if bruteFit:
+        thresholdRange = np.arange(20,55,5)
+        leakRange = np.arange(0.02,0.25,0.02)
+        sigmaRange = np.arange(0,10,1)
+        nonDecisionTimeRange = np.arange(100,500,50)
+        tauARange = np.arange(5,100,10)
+        tauIRange = np.arange(5,100,10)
+        alphaIRange = np.arange(1,10,1)
+    else:
+        thresholdRange = (0,100)
+        leakRange = (0,1)
+        sigmaRange = (0,10)
+        nonDecisionTimeRange = (0,750)
+        tauARange = (1,200)
+        tauIRange = (1,200)
+        alphaIRange = (0.1,10)
 
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    qualityUnits = apply_unit_quality_filter(units)
     spikes = unitData[str(sessionId)]['spikes']
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
@@ -526,12 +534,6 @@ def fitIntegratorModel(sessionId):
     lickLatency = lickTimes - flashTimes
     nFlash = len(flashTimes)
     nChange = changeFlashes.sum()
-
-    trialFlashAllSessions = stimTable['trial_flash']
-    changeFlashAllSessions = trialFlashAllSessions[stimTable['is_change']]
-    changeProb = np.histogram(changeFlashAllSessions,bins=np.arange(trialFlashAllSessions.max()+2))[0] / len(changeFlashAllSessions)
-    changeProb /= changeProb.max()
-    pChange = changeProb[stim['trial_flash']]
 
     outcome = []
     for lbl in ('hit','miss','false_alarm','correct_reject'):
@@ -553,9 +555,8 @@ def fitIntegratorModel(sessionId):
     d['binSize'] = binSize
     d['thresholdRange'] = thresholdRange
     d['leakRange'] = leakRange
-    d['wTimingRange'] = wTimingRange
-    d['wNovelRange'] = wNovelRange
     d['sigmaRange'] = sigmaRange
+    d['nonDecisionTimeRange'] = nonDecisionTimeRange
     d['tauARange'] = tauARange
     d['tauIRange'] = tauIRange
     d['alphaIRange'] = alphaIRange
@@ -604,74 +605,33 @@ def fitIntegratorModel(sessionId):
 
     warnings.filterwarnings('ignore')
     for region in regions:
-        inRegion = getUnitsInRegion(units,region,layer=layer,rs=True)
-        if not any(inRegion):
-            continue
-        
-        sp = np.zeros((inRegion.sum(),spikes.shape[1],spikes.shape[2]),dtype=bool)
-        for i,u in enumerate(np.where(inRegion)[0]):
-            sp[i] = spikes[u,:,:]
-            
-        changeSp = sp[:,changeFlashes,:]
-        preChangeSp = sp[:,preChangeFlashes,:]
-        hasResp = findResponsiveUnits(preChangeSp,changeSp,baseWin,respWin)
-        nUnits = hasResp.sum()
+        unitsToUse = qualityUnits & getUnitsInRegion(units,region,layer=layer,rs=True)
+        nUnits = unitsToUse.sum()
         if nUnits < minUnits:
             continue
         d[region]['nUnits'] = nUnits
 
-        sp = sp[hasResp]
+        sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(unitsToUse)[0]):
+            sp[i] = spikes[u,:,:]
+            
         baseline = sp[:,:,-tEnd:].mean(axis=-1)
         baseline = np.concatenate((baseline[:,0][:,None],baseline[:,:-1]),axis=1)
         sp = sp[:,:,:tEnd] - baseline[:,:,None]
         if binSize > 1:
             sp = sp.reshape((nUnits,nFlash,nBins,binSize)).sum(axis=-1)
         
-        d[region]['decoderTrainAccuracy'] = {}
-        d[region]['decoderWeights'] = {}
-        d[region]['decoderAccuracy'] = {}
-        d[region]['decoderPrediction'] = {}
-        d[region]['decoderConfidence'] = {}
-        for X,lbl in zip((sp.mean(axis=0),sp.sum(axis=-1).T,sp.transpose(1,0,2).reshape((nFlash,-1))),
-                         ('populationAverage','allUnitSpikeCount','allUnitSpikeBins')):              
-            decoderTrainAccuracy = np.zeros(nCrossVal+1)
-            decoderWeights = np.zeros((nCrossVal+1,X.shape[1]))
-            decoderAccuracy = np.zeros(nCrossVal)
-            decoderPrediction = np.zeros(nFlash)
-            decoderConfidence = np.zeros(nFlash)
-            for k,(train,test) in enumerate(zip(trainInd['change'],testInd['change'])):
-                decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
-                decoder.fit(X[train],y['change'][train])
-                decoderTrainAccuracy[k] = decoder.score(X[train],y['change'][train])
-                decoderWeights[k] = np.squeeze(decoder.coef_)
-                if k < nCrossVal:
-                    decoderAccuracy[k] = decoder.score(X[test],y['change'][test])
-                decoderPrediction[test] = decoder.predict(X[test])
-                decoderConfidence[test] = decoder.decision_function(X[test])
-            d[region]['decoderTrainAccuracy'][lbl] = decoderTrainAccuracy
-            d[region]['decoderWeights'][lbl] = decoderWeights
-            d[region]['decoderAccuracy'][lbl] = decoderAccuracy
-            d[region]['decoderPrediction'][lbl] = decoderPrediction
-            d[region]['decoderConfidence'][lbl] = decoderConfidence
-
-        if weighted:
-            fam = sp[:,changeFlashes & ~novelFlashes].mean(axis=(1,2))
-            nov = sp[:,changeFlashes & novelFlashes].mean(axis=(1,2))
-            w = np.clip((fam - nov) / (fam + nov),-1,1)
-            w += 1
-            w /= 2
-            sp *= w[:,None,None]
         flashSp = sp.mean(axis=0)
-        inputNorm = flashSp.max()
+        inputNorm = 1 # flashSp.max()
         flashSp /= inputNorm
+        flashSp *= 1000
         d[region]['inputNorm'] = inputNorm
         d[region]['integratorInput'] = flashSp
 
         d[region]['threshold'] = {}
         d[region]['leak'] = {}
-        d[region]['wTiming'] = {}
-        d[region]['wNovel'] = {}
         d[region]['sigma'] = {}
+        d[region]['nonDecisionTime'] = {}
         d[region]['tauA'] = {}
         d[region]['tauI'] = {}
         d[region]['alphaI'] = {}
@@ -681,12 +641,11 @@ def fitIntegratorModel(sessionId):
         d[region]['integratorResp'] = {}
         d[region]['integratorRespTime'] = {}
         d[region]['integratorShuffledAccuracy'] = {}
-        for lbl in ('hit','all'):
+        for lbl in ('hit',):
             thresholdFit = np.full(nCrossVal+1,np.nan)
             leakFit = thresholdFit.copy()
-            wTimingFit = thresholdFit.copy()
-            wNovelFit = thresholdFit.copy()
             sigmaFit = thresholdFit.copy()
+            nonDecisionTimeFit = thresholdFit.copy()
             tauAFit = thresholdFit.copy()
             tauIFit = thresholdFit.copy()
             alphaIFit = thresholdFit.copy()
@@ -697,17 +656,16 @@ def fitIntegratorModel(sessionId):
             integratorRespTime = integratorResp.copy()
             for k,(train,test) in enumerate(zip(trainInd[lbl],testInd[lbl])):
                 if bruteFit:
-                    thresholdFit[k],leakFit[k],integratorTrainAccuracy[k],integratorTrainRespTime[k] = fitAccumulatorBrute(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange)
-                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],thresholdFit[k],leakFit[k])[:2]
+                    thresholdFit[k],leakFit[k],tauAFit[k],tauIFit[k],alphaIFit[k],nonDecisionTimeFit[k] = fitAccumulatorBrute(flashSp[train],y[lbl][train],lickLatency[train],thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,nonDecisionTimeRange)
+                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],thresholdFit[k],leakFit[k],tauAFit[k],tauIFit[k],alphaIFit[k])[:2]
                 else:
-                    params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],pChange[train],novelFlashes[train],y[lbl][train],thresholdRange,leakRange,sigmaRange)
-                    thresholdFit[k],leakFit[k],sigmaFit[k] = params
-                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],pChange[test],novelFlashes[test],*params)[:2]
+                    params,integratorTrainLogLoss[k] = fitAccumulator(flashSp[train],y[lbl][train],lickLatency[train],thresholdRange,leakRange,tauARange,tauIRange,alphaIRange,sigmaRange,nonDecisionTimeRange)
+                    thresholdFit[k],leakFit[k],tauAFit[k],tauIFit[k],alphaIFit[k],sigmaFit[k],nonDecisionTimeFit[k] = params
+                    integratorResp[test],integratorRespTime[test] = runAccumulator(flashSp[test],*params[:-1])[:2]
             d[region]['threshold'][lbl] = thresholdFit
             d[region]['leak'][lbl] = leakFit
-            d[region]['wTiming'][lbl] = wTimingFit
-            d[region]['wNovel'][lbl] = wNovelFit
             d[region]['sigma'][lbl] = sigmaFit
+            d[region]['nonDecisionTime'][lbl] = nonDecisionTimeFit
             d[region]['tauA'][lbl] = tauAFit
             d[region]['tauI'][lbl] = tauIFit
             d[region]['alphaI'][lbl] = alphaIFit
@@ -735,18 +693,18 @@ def fitIntegratorModel(sessionId):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
-    # parser.add_argument('--sessionId',type=int)
-    # args = parser.parse_args()
-    # sessionId = args.sessionId
-    # # runFacemap(sessionId)
-    # # decodeLicksFromFacemap(sessionId)
-    # # decodeLicksFromUnits(sessionId)
-    # # decodeChange(sessionId)
-    # # fitIntegratorModel(sessionId)
-
-    parser.add_argument('--label',type=str)
-    parser.add_argument('--region',type=str)
-    parser.add_argument('--cluster',type=str)
+    parser.add_argument('--sessionId',type=int)
     args = parser.parse_args()
-    pooledDecoding(args.label,args.region,args.cluster)
+    sessionId = args.sessionId
+    # runFacemap(sessionId)
+    # decodeLicksFromFacemap(sessionId)
+    # decodeLicksFromUnits(sessionId)
+    # decodeChange(sessionId)
+    fitIntegratorModel(sessionId)
+
+    # parser.add_argument('--label',type=str)
+    # parser.add_argument('--region',type=str)
+    # parser.add_argument('--cluster',type=str)
+    # args = parser.parse_args()
+    # pooledDecoding(args.label,args.region,args.cluster)
 
