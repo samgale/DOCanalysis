@@ -52,7 +52,9 @@ for sessionId in sessionIds:
     qualityUnits = apply_unit_quality_filter(units)
     for region in regions:
         inRegion = qualityUnits if region=='all' else qualityUnits & getUnitsInRegion(units,region)
-        for clustNum,clustName in enumerate(clusters):
+        for clustName in clusters:
+            if clustName !='all':
+                clustNum = int(clustName[clustName.find(' ')+1:])
             unitsToUse = inRegion if clustName=='all' else inRegion & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clustNum-1)
             nUnits[region][clustName].append(unitsToUse.sum())
 
@@ -183,7 +185,7 @@ plt.tight_layout()
 
 
 # lick latency
-lbls = ('change','non-change','familiar change','novel change','familiar non-change','novel non-change','familiar holdover change','novel holdover change')
+lbls = ('change','non-change','familiar change','novel change','familiar non-change','novel non-change','familiar holdover change','novel holdover change','familiar non-holdover change','novel non-holdover change')
 lickProb = {lbl: [] for lbl in lbls}
 nFlashes = {lbl: [] for lbl in lbls}
 lickLatency = {lbl: [] for lbl in lbls}
@@ -222,10 +224,11 @@ for m in mouseIds:
             lickProb[lbl+' holdover change'].append(np.sum(changeFlashes & holdover & lick)/np.sum(changeFlashes & holdover))
             nFlashes[lbl+' holdover change'].append(np.sum(changeFlashes & holdover))
             lickLatency[lbl+' holdover change'].append((lickTimes-flashTimes)[nonChangeFlashes & holdover & lick])
+            lickProb[lbl+' non-holdover change'].append(np.sum(changeFlashes & ~holdover & lick)/np.sum(changeFlashes & ~holdover))
+            nFlashes[lbl+' non-holdover change'].append(np.sum(changeFlashes & ~holdover))
+            lickLatency[lbl+' non-holdover change'].append((lickTimes-flashTimes)[nonChangeFlashes & ~holdover & lick])
 
-    
-    
-    
+
 for lbl in ('change','non-change'):
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
@@ -251,6 +254,28 @@ for lbl in ('change','non-change'):
     ax.set_ylabel('Cumulative probability')
     ax.set_title(lbl)
     plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+cumProbLick = []
+for lat in np.concatenate((lickLatency['change'],lickLatency['non-change'])):
+    dsort = np.sort(lat)
+    cumProb = np.array([np.sum(dsort<=i)/dsort.size for i in dsort])
+    ax.plot(dsort,cumProb,'0.5',alpha=0.25)
+    h = np.histogram(lat,lickLatBins)[0]
+    cumProbLick.append(np.cumsum(h)/np.sum(h))
+m = np.mean(cumProbLick,axis=0)
+s = np.std(cumProbLick,axis=0)/(len(cumProbLick)**0.5)
+ax.plot(lickLatTime,m,color='k',lw=2)
+ax.fill_between(lickLatTime,m+s,m-s,color='k',alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([0,1.01])
+ax.set_xlabel('Lick latency (s)')
+ax.set_ylabel('Cumulative probability')
+plt.tight_layout()
     
 fig = plt.figure()
 ax = fig.add_subplot(1,1,1)
@@ -314,6 +339,38 @@ ax.set_ylim([0,0.75])
 ax.set_aspect('equal')
 ax.set_xlabel('Familiar holdover change lick latency (s)')
 ax.set_ylabel('Novel holdover change lick latency (s)')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['familiar non-holdover change']]
+y = [np.nanmean(lat) for lat in lickLatency['familiar holdover change']]
+ax.plot([0,0.75],[0,0.75],'k--')
+ax.plot(x,y,'ko')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([0,0.75])
+ax.set_aspect('equal')
+ax.set_xlabel('Familiar non-holdover change lick latency (s)')
+ax.set_ylabel('Familiar holdover change lick latency (s)')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = [np.nanmean(lat) for lat in lickLatency['familiar non-holdover change']]
+y = [np.nanmean(lat) for lat in lickLatency['novel non-holdover change']]
+ax.plot([0,0.75],[0,0.75],'k--')
+ax.plot(x,y,'ko')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xlim([0,0.75])
+ax.set_ylim([0,0.75])
+ax.set_aspect('equal')
+ax.set_xlabel('Familiar non-holdover change lick latency (s)')
+ax.set_ylabel('Novel non-holdover change lick latency (s)')
 plt.tight_layout()
 
 
@@ -425,18 +482,20 @@ for key in ('avgframe','motMask'):
 
 
 # facemap lick decoding
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
 facemapLickDecoding = []
 for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
     if d['lick'].sum() >= 10:
-        ax.plot(d['decodeWindows'],d['balancedAccuracy'],'0.5',alpha=0.25)
         facemapLickDecoding.append(d['balancedAccuracy'])
+facemapDecodingTime= d['decodeWindows']
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for d in facemapLickDecoding:
+    ax.plot(facemapDecodingTime,d,'0.5',alpha=0.25)
 m = np.mean(facemapLickDecoding,axis=0)
 s = np.std(facemapLickDecoding,axis=0)/(len(facemapLickDecoding)**0.5)
-facemapDecodingTime= d['decodeWindows']
 ax.plot(facemapDecodingTime,m,color='g',lw=2)
 ax.fill_between(facemapDecodingTime,m+s,m-s,color='g',alpha=0.25)
 for side in ('right','top'):
@@ -487,8 +546,8 @@ for lbl in labels:
 for lbl in labels:
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
-    for i,region in enumerate(regions):
-        for j,clust in enumerate(clusters):
+    for i,region in enumerate(regions[1:]):
+        for j,clust in enumerate(clusters[1:]):
             ax.plot(decodeWindows,accuracy[lbl][region][clust],'k',alpha=0.2)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
@@ -503,11 +562,11 @@ for lbl in labels:
 for lbl in labels:
     fig = plt.figure(figsize=(6,10))
     ax = fig.add_subplot(1,1,1)
-    m = np.full((len(regions)*len(clusters),len(decodeWindows)),np.nan)
+    m = np.full(((len(regions)-1)*(len(clusters)-1),len(decodeWindows)),np.nan)
     ylbls = []
     k = 0
-    for region in regions:
-        for clust in clusters:
+    for region in regions[1:]:
+        for clust in clusters[1:]:
             m[k] = accuracy[lbl][region][clust]
             ylbls.append(region+', '+clust)
             k += 1
@@ -519,14 +578,14 @@ for lbl in labels:
     ax.set_xticks(xticks)
     ax.set_xticklabels(decodeWindows[xticks])
     ax.set_xlabel('Time from change (ms)')
-    ax.set_yticks(np.arange(len(regions)*len(clusters)))
+    ax.set_yticks(np.arange(len(ylbls)))
     ax.set_yticklabels(ylbls,rotation=0,ha='right',fontsize=4)
     ax.set_ylabel('Region/cluster')
     ax.set_title(lbl+' decoding accuracy')
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
 
-for lbl,t in zip(labels,(100,200)):
+for lbl,t in zip(labels,(100,200,200)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
     m = np.full((len(regions),len(clusters)),np.nan)
@@ -605,6 +664,85 @@ for lbl in labels:
     ax.set_ylim([0.5,1])
     ax.set_xlabel(lbl+' decoding latency')
     ax.set_ylabel('max '+lbl+' decoding accuracy')
+    plt.tight_layout()
+
+for lbl in ('change','lick'):
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for region,clust,clr,lb in zip((('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SC','MRN','MB'),('VISpm','VISam'),('SC','MRN','MB')),
+                                   ('cluster 2','cluster 2','cluster 7','cluster 11'),
+                                   'rbmc',('change','change','lick','lick')):
+        if lb==lbl:
+            ax.plot(decodeWindows,np.mean([accuracy[lbl][r][clust] for r in region],axis=0),color=clr,label=str(region)+' '+clust)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,750])
+    ax.set_ylim([0.45,1])
+    ax.set_xlabel('Time from change (ms)')
+    ax.set_ylabel(lbl+' decoding accuracy')
+    ax.legend()
+    plt.tight_layout()
+ 
+
+# psth
+regions = (('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SCig','SCiw','MRN','MB'),('VISpm','VISam'),('SCig','SCiw','MRN','MB'))
+clusters = (2,2,7,11)
+psthBinSize = 5
+psthTime = np.arange(0,750,psthBinSize)/1000
+psth = {str(region)+' cluster '+str(clust): {lbl: [] for lbl in ('change','hit','miss','non-change lick','non-change no lick')} for region,clust in zip(regions,clusters)}
+for sessionInd,sessionId in enumerate(sessionIds):
+    print(sessionInd)
+    units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
+    qualityUnits = apply_unit_quality_filter(units)
+    spikes = unitData[str(sessionId)]['spikes']
+
+    stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
+    flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+    outcome = []
+    for lbl in ('hit','miss'):
+        a = stim[lbl].copy()
+        a[a.isnull()] = False
+        outcome.append(np.array(a).astype(bool))
+    hit = outcome[0] & changeFlashes
+    miss = outcome[1] & changeFlashes
+    
+    for region,clust in zip(regions,clusters):
+        key = str(region)+' cluster '+str(clust)
+        unitsToUse = qualityUnits & getUnitsInRegion(units,region) & getUnitsInCluster(units,clusterTable['unit_id'],clusterTable['cluster_labels'],clust-1)
+        nUnits = unitsToUse.sum() 
+        
+        sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
+        for i,u in enumerate(np.where(unitsToUse)[0]):
+            sp[i]=spikes[u,:,:]
+            
+        if nUnits > 0:
+            for ind,lbl in zip((changeFlashes,hit,miss,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
+                               ('change','hit','miss','non-change lick','non-change no lick')):
+                nTrials = ind.sum()
+                if nTrials > 0:
+                    r = sp[:,ind].reshape(nUnits,nTrials,-1,psthBinSize).mean(axis=-1)
+                    psth[key][lbl].append(r.mean(axis=1))
+                else:
+                    psth[key][lbl].append(np.full((nUnits,int(750/psthBinSize)),np.nan))
+            
+for key in psth:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for lbl,clr in zip(list(psth[key].keys())[1:],'grbk'):
+        d = np.concatenate(psth[key][lbl])*1000
+        m = np.nanmean(d,axis=0)
+        s = np.nanstd(d)/(len(d)**0.5)
+        ax.plot(psthTime,m,color=clr,label=lbl)
+        ax.fill_between(psthTime,m+s,m-s,color=clr,alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,0.75])
+    ax.set_xlabel('Time from flash onset (s)')
+    ax.set_ylabel('Spikes/s')
+    ax.legend(loc='upper right')
+    ax.set_title(key + ' (n='+str(len(d))+')')
     plt.tight_layout()
 
 
@@ -1255,11 +1393,13 @@ respMiceRegions = {region: {flashes: {imgLbl: [] for imgLbl in imageTypeLabels} 
 respTimeMiceRegions = copy.deepcopy(respMiceRegions)
 imageNames = copy.deepcopy(respMiceRegions)
 integratorInput = copy.deepcopy(respMiceRegions)
+inputNorm = {region: [] for region in regions}
 respModel = {region: {flashes: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for flashes in flashLabels} for region in regions}
 respTimeModel = copy.deepcopy(respModel)
 threshold = {region: {imgLbl: {modLbl: [] for modLbl in modelLabels} for imgLbl in imageTypeLabels} for region in regions}
 leak = copy.deepcopy(threshold)
 sigma = copy.deepcopy(threshold)
+nonDecisionTime = copy.deepcopy(threshold)
 tauA = copy.deepcopy(threshold)
 tauI = copy.deepcopy(threshold)
 alphaI = copy.deepcopy(threshold)
@@ -1290,6 +1430,7 @@ for i,f in enumerate(filePaths):
                     # if mod=='hit':
                     #     shuffledAccuracy[region][mod].append(d[region]['integratorShuffledAccuracy'][mod][()])
                 intgInput = d[region]['integratorInput'][()]
+                inputNorm[region].append(d[region]['inputNorm'][()])
                 intgResp = {mod: d[region]['integratorResp'][mod][()] for mod in modelLabels}
                 intgRt = {mod: d[region]['integratorRespTime'][mod][()] for mod in modelLabels}
             for k,flashes in enumerate(flashLabels):
@@ -1316,6 +1457,7 @@ for i,f in enumerate(filePaths):
                                 threshold[region][lbl][mod].append(d[region]['threshold'][mod][()])
                                 leak[region][lbl][mod].append(d[region]['leak'][mod][()])
                                 sigma[region][lbl][mod].append(d[region]['sigma'][mod][()])
+                                nonDecisionTime[region][lbl][mod].append(d[region]['nonDecisionTime'][mod][()])
                                 tauA[region][lbl][mod].append(d[region]['tauA'][mod][()])
                                 tauI[region][lbl][mod].append(d[region]['tauI'][mod][()])
                                 alphaI[region][lbl][mod].append(d[region]['alphaI'][mod][()])
@@ -1324,12 +1466,14 @@ for i,f in enumerate(filePaths):
 
 # plot mean input spike rate
 for region in regions:
-    for flashes in ('change',): #flashLabels:
+    for flashes in ('change','preChange'): #flashLabels:
         fig = plt.figure()
         ax = fig.add_subplot(1,1,1)
         for lbl,clr in zip(imageTypeLabels[1:],imageTypeColors):
             d = np.array(integratorInput[region][flashes][lbl])
             if len(d) > 0:
+                d *= np.array(inputNorm[region])[:,None]
+                # d *= 1000
                 m = np.nanmean(d,axis=0)
                 n = np.sum(~np.isnan(d[:,0]))
                 s = np.nanstd(d,axis=0)/(n**0.5)
@@ -1341,7 +1485,7 @@ for region in regions:
         # ax.set_xlim([tStart,tEnd])
         # ax.set_ylim([-1,16])
         ax.set_xlabel('Time from flash onset (ms)')
-        ax.set_ylabel('Weighted Spikes/s')
+        ax.set_ylabel('Spikes/s')
         ax.set_title(region+', '+flashes)
         ax.legend(fontsize=8,bbox_to_anchor=(1,1),loc='upper left')
         plt.tight_layout()
