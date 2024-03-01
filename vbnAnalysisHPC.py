@@ -154,12 +154,12 @@ def decodeLicksFromUnits(sessionId):
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
     unitSampleDecodeWindow = 750
-    decodeWindowSampleSize = 10
+    decodeWindowSampleSize = 20
 
-    regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-               'MRN','MB','SC','APN','NOT','Hipp')
+    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+               'MRN','MB','SC','APN','NOT','Hipp') #+ ('all',)
 
-    clusters = ['all'] + ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels']) + 1]
+    clusters = ['all'] #+ ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels']) + 1]
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -237,8 +237,8 @@ def decodeLicksFromUnits(sessionId):
 
 
 def decodeChange(sessionId):
-    trainOnFlashesWithLicks = True
     useResponsiveUnits = False
+    trainOnFlashesWithLicks = True
 
     nCrossVal = 5
     unitSampleSize = [1,5,10,15,20,25,30,40,50,60]
@@ -247,12 +247,12 @@ def decodeChange(sessionId):
     decodeWindows = np.arange(decodeWindowSize,decodeWindowEnd+decodeWindowSize,decodeWindowSize)
 
     unitSampleDecodeWindow = 750
-    decodeWindowSampleSize = 10
+    decodeWindowSampleSize = 20
    
-    regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
-               'MRN','MB','SC','APN','NOT','Hipp')
+    regions = ('LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
+               'MRN','MB','SC','APN','NOT','Hipp') #+ ('all',)
 
-    clusters = ['all'] + ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels']) + 1]
+    clusters = ['all'] #+ ['cluster '+str(c) for c in np.unique(clusterTable['cluster_labels']) + 1]
 
     baseWin = slice(680,750)
     respWin = slice(30,100)
@@ -311,6 +311,25 @@ def decodeChange(sessionId):
     else:
         y[changeFlashes] = 1
         y[preChangeFlashes] = 0
+
+    # get train/test sets
+    if np.any(novelFlashes):
+        # balance novel and familiar flashes
+        train = []
+        test = []
+        for i in (novelFlashes,~novelFlashes):
+            k = y.copy()
+            k[i] = np.nan
+            tr,ts = getTrainTestSplits(k,nCrossVal)
+            train.append(tr)
+            test.append(ts)
+        trainInd = [list(i)+list(j) for i,j in zip(*train)]
+        testInd = [list(i)+list(j) for i,j in zip(*test)]
+    else:
+        trainInd,testInd = getTrainTestSplits(y,nCrossVal)
+    # use all train/test flashes as training set for all other flashes
+    trainInd.append(np.where(~np.isnan(y))[0])
+    testInd.append(np.where(np.isnan(y))[0])
     
     warnings.filterwarnings('ignore')
     for region in regions:
@@ -348,23 +367,6 @@ def decodeChange(sessionId):
                         d[region][cluster][sampleSize][metric].append([])
 
                     for unitSamp in unitSamples:
-                        # get train/test sets
-                        if np.any(novelFlashes):
-                            # balance novel and familiar flashes
-                            train = []
-                            test = []
-                            for i in (novelFlashes,~novelFlashes):
-                                k = y.copy()
-                                k[i] = np.nan
-                                tr,ts = getTrainTestSplits(k,nCrossVal)
-                                train.append(tr)
-                                test.append(ts)
-                            trainInd = [list(i)+list(j) for i,j in zip(*train)]
-                            testInd = [list(i)+list(j) for i,j in zip(*test)]
-                        # use all train/test sets as training set for all other flashes
-                        trainInd.append(np.where(~np.isnan(y))[0])
-                        testInd.append(np.where(np.isnan(y))[0])
-
                         X = flashSp[unitSamp,:,:winEnd].transpose(1,0,2).reshape((nFlash,-1))       
                         trainAccuracy = np.zeros(nCrossVal+1)
                         featureWeights = np.zeros((nCrossVal+1,X.shape[1]))
@@ -698,9 +700,9 @@ if __name__ == "__main__":
     sessionId = args.sessionId
     # runFacemap(sessionId)
     # decodeLicksFromFacemap(sessionId)
-    # decodeLicksFromUnits(sessionId)
+    decodeLicksFromUnits(sessionId)
     # decodeChange(sessionId)
-    fitIntegratorModel(sessionId)
+    # fitIntegratorModel(sessionId)
 
     # parser.add_argument('--label',type=str)
     # parser.add_argument('--region',type=str)
