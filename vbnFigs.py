@@ -41,9 +41,17 @@ holdoverImages = ('im083_r','im111_r')
 
 layers = ('1','2/3','4','5','6a','6b')
 
+namedClusters = ('all','cluster 2','cluster 1','cluster 3','cluster 5','cluster 6',
+                 'cluster 7','cluster 11','cluster 13','cluster 12','cluster 10')
+clusterNames = ('all','Transient','Sustained','Off-transient','Off-sustained','Omission',
+                'Change','Lick-hit - early','Lick-hit - biphasic','Lick-hit - late','Hit suppressed')
+
 
 # VISpm/am cluster 7 layers
 unitsToUse = apply_unit_quality_filter(unitTable) & getUnitsInRegion(unitTable.set_index('unit_id'),('VISpm','VISam')) & getUnitsInCluster(unitTable.set_index('unit_id'),clusterTable['unit_id'],clusterTable['cluster_labels'],6)
+
+# unitTable[unitsToUse]['waveform_duration'] > 0.4
+
 n = [np.sum(unitTable[unitsToUse]['cortical_layer']==lay) for lay in layers]
 
 fig = plt.figure()
@@ -109,19 +117,18 @@ plt.tight_layout()
 
 fig = plt.figure(figsize=(6,6))
 ax = fig.add_subplot(1,1,1)
-n = np.zeros((len(regions)-1,len(clusters)-1))
+n = np.zeros((len(regions)-1,len(namedClusters)-1))
 for i,region in enumerate(regions[1:]):
-    for j,clust in enumerate(clusters[1:]):
+    for j,clust in enumerate(namedClusters[1:]):
         n[i,j] = sum(nUnits[region][clust])
 n /= np.sum(n,axis=1)[:,None]
 im = ax.imshow(n,cmap='magma',clim=(0,0.5))
 for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False)
-xticks = np.arange(len(clusters)-1)
+xticks = np.arange(len(clusterNames)-1)
 ax.set_xticks(xticks)
-ax.set_xticklabels([c[c.find(' ')+1:] for c in clusters[1:]])
-ax.set_xlabel('Cluster')
+ax.set_xticklabels(clusterNames[1:],rotation=90)
 ax.set_yticks(np.arange(len(regions)-1))
 ax.set_yticklabels(regions[1:],rotation=0,ha='right')
 ax.set_ylabel('Region')
@@ -605,7 +612,7 @@ for lbl in labels:
     ax.set_title(lbl+' decoding accuracy')
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
-
+    
 for lbl,t in zip(labels,(100,200,200)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
@@ -619,6 +626,25 @@ for lbl,t in zip(labels,(100,200,200)):
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xticks(np.arange(len(clusters)))
     ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
+    ax.set_yticks(np.arange(len(regions)))
+    ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
+    ax.set_title(lbl+' decoding accuracy at '+str(t)+' ms')
+    cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
+    plt.tight_layout()
+
+for lbl,t in zip(labels,(100,200,200)):
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(1,1,1)
+    m = np.full((len(regions),len(namedClusters)),np.nan)
+    for i,region in enumerate(regions):
+        for j,clust in enumerate(namedClusters):
+            m[i,j] = accuracy[lbl][region][clust][np.where(decodeWindows==t)[0][0]]
+    im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(np.arange(len(clusterNames)))
+    ax.set_xticklabels(clusterNames,rotation=90,ha='center',fontsize=6)
     ax.set_yticks(np.arange(len(regions)))
     ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
     ax.set_title(lbl+' decoding accuracy at '+str(t)+' ms')
@@ -647,16 +673,16 @@ for lbl in labels:
 for lbl,cmin in zip(labels,(50,100,50)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
-    m = np.full((len(regions),len(clusters)),np.nan)
+    m = np.full((len(regions),len(namedClusters)),np.nan)
     for i,region in enumerate(regions):
-        for j,clust in enumerate(clusters):
+        for j,clust in enumerate(namedClusters):
             m[i,j] = np.log10(latency[lbl][region][clust])
     im = ax.imshow(m,cmap='magma_r',clim=np.log10([cmin,500]))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xticks(np.arange(len(clusters)))
-    ax.set_xticklabels(clusters,rotation=90,ha='center',fontsize=6)
+    ax.set_xticks(np.arange(len(clusterNames)))
+    ax.set_xticklabels(clusterNames,rotation=90,ha='center',fontsize=6)
     ax.set_yticks(np.arange(len(regions)))
     ax.set_yticklabels(regions,rotation=0,ha='right',fontsize=6)
     ax.set_title(lbl+' decoding latency (ms; scaled)')
