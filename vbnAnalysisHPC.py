@@ -96,7 +96,7 @@ def runFacemap(sessionId):
         os.remove(facemapDataPath)
 
 
-def decodeLicksFromFacemap(sessionId):
+def decodeFromFacemap(sessionId):
     model = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
     nCrossVal = 5
     decodeWindowStart = 0
@@ -106,8 +106,6 @@ def decodeLicksFromFacemap(sessionId):
     
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-    flashTimes = flashTimes[nonChangeFlashes]
-    lick = lick[nonChangeFlashes]
     
     flashSvd = []
     videoIndex = np.where(videoTable['session_id'] == sessionId)[0][0]
@@ -125,23 +123,32 @@ def decodeLicksFromFacemap(sessionId):
             flashSvd[-1].append(svd[frameIndex])
     flashSvd = np.concatenate(flashSvd,axis=2)
     
-    d = {metric: [] for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
+    decoderLabels = ('non-change lick','change lick novel','change no lick novel','non-change lick novel','non-change no lick novel')
+    d = {metric: {lbl: [] for lbl in decoderLabels} for metric in ('trainAccuracy','featureWeights','accuracy','balancedAccuracy','prediction','confidence')}
     d['decodeWindows'] = decodeWindows
+    d['changeFlashes'] = changeFlashes
+    d['nonChangeFlashes'] = nonChangeFlashes
+    d['novelFlashes'] = novelFlashes
     d['lick'] = lick
-    y = lick
-    warnings.filterwarnings('ignore')
-    for i in range(len(decodeWindows)):
-        X = flashSvd[:,:i+1].reshape(len(flashTimes),-1)   
-        cv = trainDecoder(model,X,y,nCrossVal)
-        d['trainAccuracy'].append(np.mean(cv['train_score']))
-        d['featureWeights'].append(np.mean(cv['coef'],axis=0).squeeze())
-        d['accuracy'].append(np.mean(cv['test_score']))
-        d['balancedAccuracy'].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
-        d['prediction'].append(cv['predict'])
-        d['confidence'].append(cv['decision_function'])
-    warnings.filterwarnings('default')
     
-    np.save(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_'+str(sessionId)+'.npy'),d)
+    for lbl,flashes,ind in zip(decoderLabels,
+                               (nonChangeFlashes,changeFlashes & lick,changeFlashes & ~lick,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
+                               (lick,novelFlashes,novelFlashes,novelFlashes)):
+        y = ind[flashes]
+        if np.sum(y) >= 10 and np.sum(~y) >= 10:
+            warnings.filterwarnings('ignore')
+            for i in range(len(decodeWindows)):
+                X = flashSvd[flashes,:i+1].reshape(flashes.sum(),-1)   
+                cv = trainDecoder(model,X,y,nCrossVal)
+                d['trainAccuracy'][lbl].append(np.mean(cv['train_score']))
+                d['featureWeights'][lbl].append(np.mean(cv['coef'],axis=0).squeeze())
+                d['accuracy'][lbl].append(np.mean(cv['test_score']))
+                d['balancedAccuracy'][lbl].append(sklearn.metrics.balanced_accuracy_score(y,cv['predict']))
+                d['prediction'][lbl].append(cv['predict'])
+                d['confidence'][lbl].append(cv['decision_function'])
+            warnings.filterwarnings('default')
+    
+    np.save(os.path.join(outputDir,'facemapDecoding','facemapDecoding_'+str(sessionId)+'.npy'),d)
 
 
 def decodeLicksFromUnits(sessionId):
@@ -699,8 +706,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     sessionId = args.sessionId
     # runFacemap(sessionId)
-    # decodeLicksFromFacemap(sessionId)
-    decodeLicksFromUnits(sessionId)
+    decodeFromFacemap(sessionId)
+    # decodeLicksFromUnits(sessionId)
     # decodeChange(sessionId)
     # fitIntegratorModel(sessionId)
 
