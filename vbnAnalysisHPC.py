@@ -133,7 +133,7 @@ def decodeFromFacemap(sessionId):
     
     for lbl,flashes,ind in zip(decoderLabels,
                                (nonChangeFlashes,changeFlashes & lick,changeFlashes & ~lick,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
-                               (lick,novelFlashes,novelFlashes,novelFlashes)):
+                               (lick,novelFlashes,novelFlashes,novelFlashes,novelFlashes)):
         y = ind[flashes]
         if np.sum(y) >= 10 and np.sum(~y) >= 10:
             warnings.filterwarnings('ignore')
