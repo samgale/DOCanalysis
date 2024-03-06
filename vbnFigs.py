@@ -509,31 +509,36 @@ for key in ('avgframe','motMask'):
     plt.tight_layout()
 
 
-# facemap lick decoding
-facemapLickDecoding = []
-for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapLickDecoding','facemapLickDecoding_*.npy'))):
+# facemap decoding
+facemapDecoderLabels = ('non-change lick','change lick novel','non-change lick novel','non-change no lick novel')
+facemapDecoding = {lbl: [] for lbl in facemapDecoderLabels}
+for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapDecoding','facemapDecoding_*.npy'))):
     print(i)
     d = np.load(f,allow_pickle=True).item()
-    if d['lick'].sum() >= 10:
-        facemapLickDecoding.append(d['balancedAccuracy'])
+    for lbl in facemapDecoding:
+        a = d['balancedAccuracy'][lbl]
+        if len(a) > 0:
+            facemapDecoding[lbl].append(a)
 facemapDecodingTime= d['decodeWindows']
 
-fig = plt.figure()
-ax = fig.add_subplot(1,1,1)
-for d in facemapLickDecoding:
-    ax.plot(facemapDecodingTime,d,'0.5',alpha=0.25)
-m = np.mean(facemapLickDecoding,axis=0)
-s = np.std(facemapLickDecoding,axis=0)/(len(facemapLickDecoding)**0.5)
-ax.plot(facemapDecodingTime,m,color='g',lw=2)
-ax.fill_between(facemapDecodingTime,m+s,m-s,color='g',alpha=0.25)
-for side in ('right','top'):
-    ax.spines[side].set_visible(False)
-ax.tick_params(direction='out',top=False,right=False)
-ax.set_xlim([0,0.75])
-ax.set_ylim([0.45,1])
-ax.set_xlabel('Time from non-change flash onset (ms)')
-ax.set_ylabel('Lick decoding balanced accuracy')
-plt.tight_layout()
+for lbl in facemapDecoding:
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    for d in facemapDecoding[lbl]:
+        ax.plot(facemapDecodingTime,d,'0.5',alpha=0.25)
+    m = np.mean(facemapDecoding[lbl],axis=0)
+    s = np.std(facemapDecoding[lbl],axis=0)/(len(facemapDecoding[lbl])**0.5)
+    ax.plot(facemapDecodingTime,m,color='g',lw=2)
+    ax.fill_between(facemapDecodingTime,m+s,m-s,color='g',alpha=0.25)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xlim([0,0.75])
+    ax.set_ylim([0.45,1])
+    ax.set_xlabel('Time from flash onset (ms)')
+    ax.set_ylabel(('novel image' if 'novel' in lbl else 'lick') + ' decoding balanced accuracy')
+    ax.set_title(lbl + ' decoding (n=' + str(len(facemapDecoding[lbl])) + ')')
+    plt.tight_layout()
 
 
 # pooled sessions change and lick decoding
