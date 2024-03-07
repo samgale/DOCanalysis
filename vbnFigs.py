@@ -510,7 +510,7 @@ for key in ('avgframe','motMask'):
 
 
 # facemap decoding
-facemapDecoderLabels = ('non-change lick','change lick novel','non-change lick novel','non-change no lick novel')
+facemapDecoderLabels = ('non-change lick','change lick novel','change no lick novel','non-change lick novel','non-change no lick novel')
 facemapDecoding = {lbl: [] for lbl in facemapDecoderLabels}
 for i,f in enumerate(glob.glob(os.path.join(outputDir,'facemapDecoding','facemapDecoding_*.npy'))):
     print(i)
