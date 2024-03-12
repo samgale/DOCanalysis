@@ -23,12 +23,14 @@ baseDir = r'\\allen\programs\mindscope\workgroups\np-behavior\vbn_data_release\s
 
 outputDir = r'\\allen\programs\mindscope\workgroups\np-behavior\VBN_video_analysis'
 
-stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_with_mouse_id.csv'))
-
 unitTable = pd.read_csv(os.path.join(baseDir,'master_unit_table.csv'))
+
 unitData = h5py.File(os.path.join(baseDir,'vbnAllUnitSpikeTensor.hdf5'),mode='r')
 
 clusterTable = pd.read_csv(os.path.join(baseDir,'unit_cluster_labels.csv'))
+
+stimTable = pd.read_csv(os.path.join(baseDir,'master_stim_with_mouse_id.csv'))
+stimTable = stimTable[stimTable['abnormal_histology'].isnull() & stimTable['abnormal_activity'].isnull()]
 
 sessionIds = stimTable['session_id'].unique()
 novelSessionIds = stimTable['session_id'][stimTable['experience_level']=='Novel'].unique()
@@ -603,7 +605,9 @@ for lbl in labels:
             m[k] = accuracy[lbl][region][clust]
             ylbls.append(region+', '+clust)
             k += 1
-    im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+    cmap = matplotlib.cm.magma.copy()
+    cmap.set_bad(color=[0.5]*3)
+    im = ax.imshow(m,cmap=cmap,clim=(0.5,1))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -625,7 +629,9 @@ for lbl,t in zip(labels,(100,200,200)):
     for i,region in enumerate(regions):
         for j,clust in enumerate(clusters):
             m[i,j] = accuracy[lbl][region][clust][np.where(decodeWindows==t)[0][0]]
-    im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+    cmap = matplotlib.cm.magma.copy()
+    cmap.set_bad(color=[0.5]*3)
+    im = ax.imshow(m,cmap=cmap,clim=(0.5,1))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -644,7 +650,9 @@ for lbl,t in zip(labels,(100,200,200)):
     for i,region in enumerate(regions):
         for j,clust in enumerate(namedClusters):
             m[i,j] = accuracy[lbl][region][clust][np.where(decodeWindows==t)[0][0]]
-    im = ax.imshow(m,cmap='magma',clim=(0.5,1))
+    cmap = matplotlib.cm.magma.copy()
+    cmap.set_bad(color=[0.5]*3)
+    im = ax.imshow(m,cmap=cmap,clim=(0.5,1))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -682,7 +690,9 @@ for lbl,cmin in zip(labels,(50,100,50)):
     for i,region in enumerate(regions):
         for j,clust in enumerate(namedClusters):
             m[i,j] = np.log10(latency[lbl][region][clust])
-    im = ax.imshow(m,cmap='magma_r',clim=np.log10([cmin,500]))
+    cmap = matplotlib.cm.magma_r.copy()
+    cmap.set_bad(color=[0.5]*3)
+    im = ax.imshow(m,cmap=cmap,clim=np.log10([cmin,500]))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -738,11 +748,12 @@ for lbl in ('change','lick'):
  
 
 # psth
-regions = (('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SCig','SCiw','MRN','MB'),('VISpm','VISam'),('SCig','SCiw','MRN','MB'))
-clusters = (2,2,7,11)
+regions = (('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SCig','SCiw','MRN','MB'))
+clusters = (2,11)
 psthBinSize = 5
-psthTime = np.arange(0,750,psthBinSize)/1000
-psth = {str(region)+' cluster '+str(clust): {lbl: [] for lbl in ('change','hit','miss','non-change lick','non-change no lick')} for region,clust in zip(regions,clusters)}
+preTime = int(750/psthBinSize)
+postTime = int(750/psthBinSize)
+psth = {str(region)+' cluster '+str(clust): {lbl: {align: [] for align in ('change','lick')} for lbl in ('change lick','change no lick','non-change lick','non-change no lick')} for region,clust in zip(regions,clusters)}
 for sessionInd,sessionId in enumerate(sessionIds):
     print(sessionInd)
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -751,13 +762,8 @@ for sessionInd,sessionId in enumerate(sessionIds):
 
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-    outcome = []
-    for lbl in ('hit','miss'):
-        a = stim[lbl].copy()
-        a[a.isnull()] = False
-        outcome.append(np.array(a).astype(bool))
-    hit = outcome[0] & changeFlashes
-    miss = outcome[1] & changeFlashes
+    lickLatency = lickTimes - flashTimes
+    lickLatency *= 1000
     
     for region,clust in zip(regions,clusters):
         key = str(region)+' cluster '+str(clust)
@@ -769,33 +775,56 @@ for sessionInd,sessionId in enumerate(sessionIds):
             sp[i]=spikes[u,:,:]
             
         if nUnits > 0:
-            for ind,lbl in zip((changeFlashes,hit,miss,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
-                               ('change','hit','miss','non-change lick','non-change no lick')):
-                nTrials = ind.sum()
-                if nTrials > 0:
-                    r = sp[:,ind].reshape(nUnits,nTrials,-1,psthBinSize).mean(axis=-1)
-                    psth[key][lbl].append(r.mean(axis=1))
-                else:
-                    psth[key][lbl].append(np.full((nUnits,int(750/psthBinSize)),np.nan))
-            
+            for ind,lbl in zip((changeFlashes & lick,changeFlashes & ~lick,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
+                               ('change lick','change no lick','non-change lick','non-change no lick')):
+                nFlashes = ind.sum()
+                for align in ('change','lick'):
+                    if nFlashes==0 or (align=='lick' and 'no lick' in lbl):
+                        psth[key][lbl][align].append(np.full((nUnits,int(750/psthBinSize)),np.nan))
+                    else:
+                        if align=='change':
+                            r = sp[:,ind].reshape(nUnits,nFlashes,-1,psthBinSize).mean(axis=-1)
+                        else:
+                            r = []
+                            for i in np.where(ind)[0]:
+                                if i < len(flashTimes)-1:
+                                    t = round((lickLatency[i] + 750) / psthBinSize)
+                                    r.append(sp[:,i-1:i+2].reshape(nUnits,-1,psthBinSize).mean(axis=-1)[:,t-preTime:t+postTime])
+                            r = np.array(r)
+                        psth[key][lbl][align].append(r.mean(axis=1))
+                
+         
 for key in psth:
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
-    for lbl,clr in zip(list(psth[key].keys())[1:],'grbk'):
-        d = np.concatenate(psth[key][lbl])*1000
-        m = np.nanmean(d,axis=0)
-        s = np.nanstd(d)/(len(d)**0.5)
-        ax.plot(psthTime,m,color=clr,label=lbl)
-        ax.fill_between(psthTime,m+s,m-s,color=clr,alpha=0.25)
-    for side in ('right','top'):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xlim([0,0.75])
-    ax.set_xlabel('Time from flash onset (s)')
-    ax.set_ylabel('Spikes/s')
-    ax.legend(loc='upper right')
-    ax.set_title(key + ' (n='+str(len(d))+')')
-    plt.tight_layout()
+    for align in ('change','lick'):
+        fig = plt.figure()
+        ax = fig.add_subplot(1,1,1)
+        if align=='lick':
+            ax.plot([0,0],[-1000,1000],'k--')
+        ymin = 1000
+        ymax = 0
+        for lbl,clr in zip(list(psth[key].keys()),'grbk'):
+            d = np.concatenate(psth[key][lbl][align])*1000
+            if np.any(~np.isnan(d)):
+                m = np.nanmean(d,axis=0)
+                s = np.nanstd(d)/(len(d)**0.5)
+                t = np.arange(0,len(m))*psthBinSize/1000
+                if align=='lick':
+                    t -= preTime*psthBinSize/1000
+                ax.plot(t,m,color=clr,label=lbl)
+                ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+                ymin = min(ymin,np.min(m-s))
+                ymax = max(ymax,np.max(m+s))
+        for side in ('right','top'):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(direction='out',top=False,right=False)
+        ax.set_xlim([t[0],t[-1]])
+        yrng = ymax-ymin
+        ax.set_ylim([ymin-0.01*yrng,ymax+0.01*yrng])
+        ax.set_xlabel(('Time from flash onset (s)' if align=='change' else 'Time from lick (s)'))
+        ax.set_ylabel('Spikes/s')
+        ax.legend(loc='upper right')
+        ax.set_title(key + ' (n='+str(len(d))+')')
+        plt.tight_layout()
 
 
 # unit lick decoding
