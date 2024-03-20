@@ -296,6 +296,8 @@ for lat in np.concatenate((lickLatency['change'],lickLatency['non-change'])):
     cumProbLick.append(np.cumsum(h)/np.sum(h))
 m = np.mean(cumProbLick,axis=0)
 s = np.std(cumProbLick,axis=0)/(len(cumProbLick)**0.5)
+allLickCumProbMean = m
+allLickCumProbSem = s
 ax.plot(lickLatTime,m,color='k',lw=2)
 ax.fill_between(lickLatTime,m+s,m-s,color='k',alpha=0.25)
 for side in ('right','top'):
@@ -537,10 +539,30 @@ for lbl in facemapDecoding:
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xlim([0,0.75])
     ax.set_ylim([0.45,1])
-    ax.set_xlabel('Time from flash onset (ms)')
+    ax.set_xlabel('Time from flash onset (s)')
     ax.set_ylabel(('novel image' if 'novel' in lbl else 'lick') + ' decoding balanced accuracy')
     ax.set_title(lbl + ' decoding (n=' + str(len(facemapDecoding[lbl])) + ')')
     plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+t = facemapDecodingTime * 1000
+m = np.mean(facemapDecoding['non-change lick'],axis=0)
+s = np.std(facemapDecoding['non-change lick'],axis=0)/(len(facemapDecoding['non-change lick'])**0.5)
+ax.plot(t,m,color='g',lw=2)
+ax.fill_between(t,m+s,m-s,color='g',alpha=0.25)
+latThresh = 0.5 * (m.max() - m.min()) + m.min()
+tintp = np.arange(0,t[-1],t[1]/10)
+lat = tintp[np.where(np.interp(tintp,t,m) > latThresh)[0][0]]
+ax.plot([lat,lat],[0,1],'g--')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False,labelsize=12)
+ax.set_xlim([0,500])
+ax.set_ylim([0.45,1])
+ax.set_xlabel('Time from flash onset (ms)',fontsize=14)
+ax.set_ylabel('Lick decoding balanced accuracy',fontsize=14)
+plt.tight_layout()
 
 
 # pooled sessions change and lick decoding
@@ -731,25 +753,61 @@ for lbl in labels:
 for lbl in ('change','lick'):
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
-    for region,clust,clr,lb in zip((('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SC','MRN','MB'),('VISpm','VISam'),('SC','MRN','MB')),
-                                   ('cluster 2','cluster 2','cluster 7','cluster 11'),
-                                   'rbmc',('change','change','lick','lick')):
+    for region,clust,clr,lb in zip((('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SC','MRN','MB')),
+                                   ('cluster 2','cluster 11'),
+                                   'mc',('change','lick')):
         if lb==lbl:
-            ax.plot(decodeWindows,np.mean([accuracy[lbl][r][clust] for r in region],axis=0),color=clr,label=str(region)+' '+clust)
+            m = np.mean([accuracy[lbl][r][clust] for r in region],axis=0)
+            ax.plot(decodeWindows,m,color=clr,lw=2)
+            latThresh = 0.5 * (m.max() - m.min()) + m.min()
+            tintp = np.arange(0,decodeWindows[-1],decodeWindows[0]/10)
+            lat = tintp[np.where(np.interp(tintp,decodeWindows,m) > latThresh)[0][0]]
+            ax.plot([lat,lat],[0,1],'--',color=clr)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False,labelsize=12)
+    ax.set_xlim([0,500])
+    ax.set_ylim([0.45,1])
+    ax.set_xlabel('Time from flash onset (ms)',fontsize=14)
+    ax.set_ylabel(('Change' if lbl=='change' else 'Lick')+' decoding accuracy',fontsize=14)
+    plt.tight_layout()
+
+for lbl,t in zip(('change','lick'),(100,200)):    
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(2,1,1)
+    x = np.arange(len(namedClusters[1:]))
+    for region,clr in zip((('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SC','MRN','MB')),'rb'):
+        y = [np.nanmean([accuracy[lbl][r][clust][np.where(decodeWindows==t)[0][0]] for r in region]) for clust in namedClusters[1:]]
+        ax.plot(x,y,'o',mec=clr,mfc='none',ms=10,mew=2,label=(('VIS' if 'VIS' in region[0] else 'Midbrain') if lbl=='lick' else None))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
-    ax.set_xlim([0,750])
-    ax.set_ylim([0.45,1])
-    ax.set_xlabel('Time from change (ms)')
-    ax.set_ylabel(lbl+' decoding accuracy')
-    ax.legend()
+    ax.set_xticks(x)
+    ax.set_xticklabels([])
+    ax.set_ylim([0.5,0.9])
+    ax.set_ylabel(('Change' if lbl=='change' else 'Lick')+' decoding accuracy')
+    if lbl=='lick':
+        ax.legend(loc='upper left')
+    
+    ax = fig.add_subplot(2,1,2)
+    for region,clr in zip((('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SC','MRN','MB')),'rb'):
+        y = [np.nanmean([latency[lbl][r][clust] for r in region]) for clust in namedClusters[1:]]
+        ax.plot(x,y,'o',mec=clr,mfc='none',ms=10,mew=2)
+    for side in ('right','top'):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(direction='out',top=False,right=False)
+    ax.set_xticks(x)
+    ax.set_xticklabels(clusterNames[1:],rotation=90,ha='center')
+    ax.set_xlabel('Cluster')
+    ax.set_ylim([0,500])
+    ax.set_xlabel('Cluster')
+    ax.set_ylabel(('Change' if lbl=='change' else 'Lick')+' decoding latency (ms)')
     plt.tight_layout()
  
 
 # psth
-regions = (('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SCig','SCiw','MRN','MB'))
-clusters = (2,11)
+regions = (('VISp','VISl','VISrl','VISal','VISpm','VISam'),('SCig','SCiw','MRN','MB')) * 2
+clusters = (2,2,11,11)
 psthBinSize = 5
 preTime = int(750/psthBinSize)
 postTime = int(750/psthBinSize)
@@ -762,8 +820,8 @@ for sessionInd,sessionId in enumerate(sessionIds):
 
     stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
     flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
-    lickLatency = lickTimes - flashTimes
-    lickLatency *= 1000
+    lickLat = lickTimes - flashTimes
+    lickLat *= 1000
     
     for region,clust in zip(regions,clusters):
         key = str(region)+' cluster '+str(clust)
@@ -788,12 +846,11 @@ for sessionInd,sessionId in enumerate(sessionIds):
                             r = []
                             for i in np.where(ind)[0]:
                                 if i < len(flashTimes)-1:
-                                    t = round((lickLatency[i] + 750) / psthBinSize)
+                                    t = round((lickLat[i] + 750) / psthBinSize)
                                     r.append(sp[:,i-1:i+2].reshape(nUnits,-1,psthBinSize).mean(axis=-1)[:,t-preTime:t+postTime])
                             r = np.array(r)
                         psth[key][lbl][align].append(r.mean(axis=1))
-                
-         
+
 for key in psth:
     for align in ('change','lick'):
         fig = plt.figure()
@@ -825,6 +882,73 @@ for key in psth:
         ax.legend(loc='upper right')
         ax.set_title(key + ' (n='+str(len(d))+')')
         plt.tight_layout()
+        
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for lbl,clr,ls in zip(('change lick','non-change lick'),('r','0.6'),('-','-')):
+    d = np.concatenate(psth["('VISp', 'VISl', 'VISrl', 'VISal', 'VISpm', 'VISam') cluster 2"][lbl]['change'])*1000
+    m = np.nanmean(d,axis=0)
+    s = np.nanstd(d)/(len(d)**0.5)
+    t = np.arange(0,len(m))*psthBinSize
+    ax.plot(t,m,color=clr,ls=ls,label=lbl)
+    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False,labelsize=12)
+ax.set_xlim([0,500])
+ax.set_xlabel('Time from flash onset (ms)',fontsize=14)
+ax.set_ylabel('Spikes/s',fontsize=14)
+ax.legend(loc='upper right')
+plt.tight_layout()
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+for lbl,clr,ls in zip(('non-change lick','non-change no lick'),('b','0.6'),('-','-')):
+    d = np.concatenate(psth["('SCig', 'SCiw', 'MRN', 'MB') cluster 11"][lbl]['change'])*1000
+    m = np.nanmean(d,axis=0)
+    s = np.nanstd(d)/(len(d)**0.5)
+    t = np.arange(0,len(m))*psthBinSize
+    ax.plot(t,m,color=clr,ls=ls,label=lbl)
+    ax.fill_between(t,m+s,m-s,color=clr,alpha=0.25)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False,labelsize=12)
+ax.set_xlim([0,500])
+ax.set_xlabel('Time from flash onset (ms)',fontsize=14)
+ax.set_ylabel('Spikes/s',fontsize=14)
+ax.legend(loc='upper left')
+plt.tight_layout()
+
+
+# summary plot
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+include = (0,1,2,3,4)
+for i,(d,t,clr,lbl) in enumerate(zip((np.nanmean(np.concatenate(psth["('VISp', 'VISl', 'VISrl', 'VISal', 'VISpm', 'VISam') cluster 2"]['change lick']['change']),axis=0),
+                                      np.mean([accuracy['change'][r]['cluster 2'] for r in ('VISp','VISl','VISrl','VISal','VISpm','VISam')],axis=0),
+                                      np.nanmean(np.concatenate(psth["('SCig', 'SCiw', 'MRN', 'MB') cluster 11"]['change lick']['change']),axis=0),
+                                      np.mean([accuracy['lick'][r]['cluster 11'] for r in ('SC','MRN','MB')],axis=0),
+                                      np.mean(facemapDecoding['non-change lick'],axis=0)),
+                                     (psthTime*1000,decodeWindows,psthTime*1000,decodeWindows,facemapDecodingTime*1000),
+                                     ('r','m','b','c','g'),
+                                     ('VIS tranisient spike rate','VIS change decoding',
+                                      'Midbrain like-hit-early spike rate','Midbrain lick decoding',
+                                      'Face motion lick decoding'))):
+    if i not in include:
+        ax.plot(np.nan,np.nan,color=clr,label=' '*36)
+    else:
+        m = d-d[0]
+        m /= m.max()
+        ax.plot(t,m,color=clr,label=lbl)
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False,labelsize=12)
+ax.set_xlim([0,200])
+ax.set_ylim([-0.05,1.05])
+ax.set_xlabel('Time from flash onset (ms)',fontsize=14)
+ax.set_ylabel('Normalized value',fontsize=14)
+ax.legend(fontsize=10,loc='upper right')
+plt.tight_layout()
 
 
 # unit lick decoding
@@ -1456,7 +1580,7 @@ optoTime = np.concatenate(([0],np.array([50,83.33333333,116.66666667])/1000-0.5/
 optoEffect = 1-np.array([0.07194244604316546,0.14545454545454545,0.5132743362831859,0.7326732673267327,0.7935590421139554])
 
 
-# summary plot
+# summary plot old
 fig = plt.figure(figsize=(10,6))
 ax = fig.add_subplot(1,1,1)
 include = (0,1,2,3,4,5,6,7)
