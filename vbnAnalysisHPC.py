@@ -424,23 +424,22 @@ def pooledDecoding(label,region,cluster):
     nUnitSamples = 100
     nPseudoFlashes = 100
 
-    goSpikes = [] # binned spikes for all go flashes (decoder=1) for each session with neurons in region and cluster
-    nogoSpikes = [] # binned spikes for all nogo flashes (decoder=0)
+    flashSpikes = [] # binned spikes for all flashes of each label for each session with neurons in region and cluster
     unitIndex = [] # nUnits x (session, unit in session)
     sessionIndex = 0
     for sessionId in stimTable['session_id'].unique():
         stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
         flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
         if label == 'change':
-            goInd = changeFlashes & lick
-            nogoInd = nonChangeFlashes & lick
+            flashInd = (nonChangeFlashes & lick, changeFlashes & lick)
         elif label == 'lick':
-            goInd = nonChangeFlashes & lick
-            nogoInd = nonChangeFlashes & ~lick
+            flashInd = (nonChangeFlashes & ~lick, nonChangeFlashes & lick)
         elif label == 'hit':
-            goInd = changeFlashes & lick
-            nogoInd = changeFlashes & ~lick
-        if goInd.sum() < minFlashes or nogoInd.sum() < minFlashes:
+            flashInd = (changeFlashes & ~lick, changeFlashes & lick)
+        elif label == 'image':
+            imageName = np.array(stim['image_name'])
+            flashInd = tuple(nonChangeFlashes & ~lick & (imageName==img) for img in np.unique(imageName) if img != 'omitted')
+        if any(flashes.sum() < minFlashes for flashes in flashInd):
             continue
 
         units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -454,8 +453,12 @@ def pooledDecoding(label,region,cluster):
         sp = np.zeros((nUnits,spikes.shape[1],spikes.shape[2]),dtype=bool)
         for i,u in enumerate(np.where(unitsToUse)[0]):
             sp[i] = spikes[u,:,:]
-        goSpikes.append(sp[:,goInd,:decodeWindows[-1]].reshape((nUnits,goInd.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1))
-        nogoSpikes.append(sp[:,nogoInd,:decodeWindows[-1]].reshape((nUnits,nogoInd.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1)) 
+        
+        for f,flashes in enumerate(flashInd):
+            if sessionIndex == 0:
+                flashSpikes.append([])
+            flashSpikes[f].append(sp[:,flashes,:decodeWindows[-1]].reshape((nUnits,flashes.sum(),len(decodeWindows),decodeWindowSize)).sum(axis=-1))
+        
         unitIndex.append(np.stack((np.full(nUnits,sessionIndex),np.arange(nUnits))).T)
         sessionIndex += 1
     if sum(len(i) for i in unitIndex) < unitSampleSize:
@@ -463,33 +466,25 @@ def pooledDecoding(label,region,cluster):
     unitIndex = np.concatenate(unitIndex)
 
     unitSamples = [np.random.choice(unitIndex.shape[0],unitSampleSize,replace=False) for _ in range(nUnitSamples)]
-    y = np.zeros(nPseudoFlashes*2)
-    y[:nPseudoFlashes] = 1
+    y = np.repeat(np.arange(len(flashInd)),nPseudoFlashes)
     accuracy = np.zeros((nUnitSamples,len(decodeWindows)))
     warnings.filterwarnings('ignore')
     for i,unitSamp in enumerate(unitSamples):
-        pseudoGoTrain = np.zeros((unitSampleSize,nPseudoFlashes,len(decodeWindows)))
-        pseudoGoTest = pseudoGoTrain.copy()
-        pseudoNogoTrain = pseudoGoTrain.copy()
-        pseudoNogoTest = pseudoGoTrain.copy()
-        for k,(s,u) in enumerate(unitIndex[unitSamp]):
-            n = goSpikes[s].shape[1]
-            r = np.random.permutation(n)
-            train = r[n//2:]
-            test = r[:n//2]
-            pseudoGoTrain[k] = goSpikes[s][u,np.random.choice(train,nPseudoFlashes,replace=True)]
-            pseudoGoTest[k] = goSpikes[s][u,np.random.choice(test,nPseudoFlashes,replace=True)]
-            n = nogoSpikes[s].shape[1]
-            r = np.random.permutation(n)
-            train = r[n//2:]
-            test = r[:n//2]
-            pseudoNogoTrain[k] = nogoSpikes[s][u,np.random.choice(train,nPseudoFlashes,replace=True)]
-            pseudoNogoTest[k] = nogoSpikes[s][u,np.random.choice(test,nPseudoFlashes,replace=True)]
-        pseudoFlashTrain = np.concatenate((pseudoGoTrain,pseudoNogoTrain),axis=1)
-        pseudoFlashTest = np.concatenate((pseudoGoTest,pseudoNogoTest),axis=1)
+        pseudoTrain = [np.zeros((unitSampleSize,nPseudoFlashes,len(decodeWindows))) for _ in range(len(flashInd))]
+        pseudoTest = [np.zeros((unitSampleSize,nPseudoFlashes,len(decodeWindows))) for _ in range(len(flashInd))]
+        for f,flashes in enumerate(flashInd):
+            for k,(s,u) in enumerate(unitIndex[unitSamp]):
+                n = flashSpikes[f][s].shape[1]
+                r = np.random.permutation(n)
+                train = r[n//2:]
+                test = r[:n//2]
+                pseudoTrain[f][k] = flashSpikes[f][s][u,np.random.choice(train,nPseudoFlashes,replace=True)]
+                pseudoTest[f][k] = flashSpikes[f][s][u,np.random.choice(test,nPseudoFlashes,replace=True)]
+        pseudoTrain = np.concatenate(pseudoTrain,axis=1)
+        pseudoTest = np.concatenate(pseudoTest,axis=1)
         for j,winEnd in enumerate((decodeWindows/decodeWindowSize).astype(int)):
-            Xtrain = pseudoFlashTrain[:,:,:winEnd].transpose(1,0,2).reshape((nPseudoFlashes*2,-1))
-            Xtest = pseudoFlashTest[:,:,:winEnd].transpose(1,0,2).reshape((nPseudoFlashes*2,-1))
+            Xtrain = pseudoTrain[:,:,:winEnd].transpose(1,0,2).reshape((len(y),-1))
+            Xtest = pseudoTest[:,:,:winEnd].transpose(1,0,2).reshape((len(y),-1))
             decoder = LinearSVC(C=1.0,max_iter=int(1e4),class_weight=None)
             decoder.fit(Xtrain,y)
             accuracy[i,j] = decoder.score(Xtest,y) 
@@ -501,6 +496,8 @@ def pooledDecoding(label,region,cluster):
         dirName = 'pooledLickDecoding'
     elif label == 'hit':
         dirName = 'pooledHitDecoding'
+    elif label == 'image':
+        dirName = 'pooledImageDecoding'
     np.save(os.path.join(outputDir,dirName,dirName+'_'+region+'_'+cluster+'.npy'),accuracy)
 
 
@@ -702,18 +699,18 @@ def fitIntegratorModel(sessionId):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('--sessionId',type=int)
-    args = parser.parse_args()
-    sessionId = args.sessionId
-    # runFacemap(sessionId)
-    decodeFromFacemap(sessionId)
-    # decodeLicksFromUnits(sessionId)
-    # decodeChange(sessionId)
-    # fitIntegratorModel(sessionId)
-
-    # parser.add_argument('--label',type=str)
-    # parser.add_argument('--region',type=str)
-    # parser.add_argument('--cluster',type=str)
+    # parser.add_argument('--sessionId',type=int)
     # args = parser.parse_args()
-    # pooledDecoding(args.label,args.region,args.cluster)
+    # sessionId = args.sessionId
+    # # runFacemap(sessionId)
+    # # decodeFromFacemap(sessionId)
+    # # decodeLicksFromUnits(sessionId)
+    # # decodeChange(sessionId)
+    # # fitIntegratorModel(sessionId)
+
+    parser.add_argument('--label',type=str)
+    parser.add_argument('--region',type=str)
+    parser.add_argument('--cluster',type=str)
+    args = parser.parse_args()
+    pooledDecoding(args.label,args.region,args.cluster)
 
