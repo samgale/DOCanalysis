@@ -430,15 +430,17 @@ def pooledDecoding(label,region,cluster):
     for sessionId in stimTable['session_id'].unique():
         stim = stimTable[(stimTable['session_id']==sessionId) & stimTable['active']].reset_index()
         flashTimes,changeFlashes,catchFlashes,nonChangeFlashes,omittedFlashes,prevOmittedFlashes,novelFlashes,lick,lickTimes = getBehavData(stim)
+        imageName = np.array(stim['image_name'])
         if label == 'change':
             flashInd = (nonChangeFlashes & lick, changeFlashes & lick)
         elif label == 'lick':
             flashInd = (nonChangeFlashes & ~lick, nonChangeFlashes & lick)
         elif label == 'hit':
             flashInd = (changeFlashes & ~lick, changeFlashes & lick)
-        elif label == 'image':
-            imageName = np.array(stim['image_name'])
+        elif label == 'image':   
             flashInd = tuple(nonChangeFlashes & ~lick & (imageName==img) for img in np.unique(imageName) if img != 'omitted')
+        elif label == 'visual_response':
+            flashInd = (omittedFlashes & ~lick, nonChangeFlashes & ~lick)
         if any(flashes.sum() < minFlashes for flashes in flashInd):
             continue
 
@@ -498,6 +500,8 @@ def pooledDecoding(label,region,cluster):
         dirName = 'pooledHitDecoding'
     elif label == 'image':
         dirName = 'pooledImageDecoding'
+    elif label == 'visual_response':
+        dirName = 'pooledVisualResponseDecoding'
     np.save(os.path.join(outputDir,dirName,dirName+'_'+region+'_'+cluster+'.npy'),accuracy)
 
 
