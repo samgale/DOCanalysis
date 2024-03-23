@@ -565,8 +565,8 @@ ax.set_ylabel('Lick decoding balanced accuracy',fontsize=14)
 plt.tight_layout()
 
 
-# pooled sessions change and lick decoding
-labels = ('change','lick','hit')
+# pooled sessions decoding
+labels = ('change','lick','hit','image','visual response')
 regions = ('all','LGd','VISp','VISl','VISrl','VISal','VISpm','VISam','LP',
            'Hipp','APN','SC','MRN','MB')
 clusters = ['all'] + ['cluster '+str(c+1) for c in range(15) if c!=3]
@@ -574,12 +574,16 @@ decodeWindows = np.arange(10,751,10)
 
 accuracy = {lbl: {region: {clust: np.full(len(decodeWindows),np.nan) for clust in clusters} for region in regions} for lbl in labels}
 for lbl in labels:
-    if lbl=='change':
+    if lbl == 'change':
         baseName = 'pooledChangeDecoding'
-    elif lbl=='lick':
+    elif lbl == 'lick':
         baseName = 'pooledLickDecoding'
-    elif lbl=='hit':
+    elif lbl == 'hit':
         baseName = 'pooledHitDecoding'
+    elif lbl == 'image':
+        baseName = 'pooledImageDecoding'
+    elif lbl == 'visual response':
+        baseName = 'pooledVisualResponseDecoding'
     for f in glob.glob(os.path.join(outputDir,baseName,baseName+'_*.npy')):
         s = os.path.splitext(os.path.basename(f))[0].split('_')
         region,clust = (s[1:]) if len(s)==3 else (s[1],s[3])
@@ -605,12 +609,15 @@ for lbl in labels:
     ax = fig.add_subplot(1,1,1)
     for i,region in enumerate(regions[1:]):
         for j,clust in enumerate(clusters[1:]):
-            ax.plot(decodeWindows,accuracy[lbl][region][clust],'k',alpha=0.2)
+            if False: #region=='MRN' and clust=='cluster 2':
+                ax.plot(decodeWindows,accuracy[lbl][region][clust],'r',lw=2)
+            else:
+                ax.plot(decodeWindows,accuracy[lbl][region][clust],'k',alpha=0.2)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
     ax.set_xlim([0,750])
-    ax.set_ylim([0.45,1])
+    ax.set_ylim(([0,1] if lbl=='image' else [0.45,1]))
     ax.set_xlabel('Time from change (ms)')
     ax.set_ylabel(lbl+' decoding accuracy')
     ax.set_title('all regions/clusters')
@@ -629,7 +636,7 @@ for lbl in labels:
             k += 1
     cmap = matplotlib.cm.magma.copy()
     cmap.set_bad(color=[0.5]*3)
-    im = ax.imshow(m,cmap=cmap,clim=(0.5,1))
+    im = ax.imshow(m,cmap=cmap,clim=((0,1) if lbl=='image' else (0.5,1)))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -644,7 +651,7 @@ for lbl in labels:
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
     
-for lbl,t in zip(labels,(100,200,200)):
+for lbl,t in zip(labels,(100,200,200,100,100)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
     m = np.full((len(regions),len(clusters)),np.nan)
@@ -653,7 +660,7 @@ for lbl,t in zip(labels,(100,200,200)):
             m[i,j] = accuracy[lbl][region][clust][np.where(decodeWindows==t)[0][0]]
     cmap = matplotlib.cm.magma.copy()
     cmap.set_bad(color=[0.5]*3)
-    im = ax.imshow(m,cmap=cmap,clim=(0.5,1))
+    im = ax.imshow(m,cmap=cmap,clim=((0,1) if lbl=='image' else (0.5,1)))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -665,7 +672,7 @@ for lbl,t in zip(labels,(100,200,200)):
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
 
-for lbl,t in zip(labels,(100,200,200)):
+for lbl,t in zip(labels,(100,200,200,100,100)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
     m = np.full((len(regions),len(namedClusters)),np.nan)
@@ -674,7 +681,7 @@ for lbl,t in zip(labels,(100,200,200)):
             m[i,j] = accuracy[lbl][region][clust][np.where(decodeWindows==t)[0][0]]
     cmap = matplotlib.cm.magma.copy()
     cmap.set_bad(color=[0.5]*3)
-    im = ax.imshow(m,cmap=cmap,clim=(0.5,1))
+    im = ax.imshow(m,cmap=cmap,clim=((0,1) if lbl=='image' else (0.5,1)))
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -686,14 +693,14 @@ for lbl,t in zip(labels,(100,200,200)):
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
     
-for lbl in labels:
+for lbl,clim in zip(labels,([[50,500]]*4+[[35,200]])):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
     m = np.full((len(regions),len(clusters)),np.nan)
     for i,region in enumerate(regions):
         for j,clust in enumerate(clusters):
             m[i,j] = latency[lbl][region][clust]
-    im = ax.imshow(m,cmap='magma_r',clim=(50,500))
+    im = ax.imshow(m,cmap='magma_r',clim=clim)
     for side in ('right','top'):
         ax.spines[side].set_visible(False)
     ax.tick_params(direction='out',top=False,right=False)
@@ -705,7 +712,20 @@ for lbl in labels:
     cb = plt.colorbar(im,ax=ax,fraction=0.05,pad=0.04,shrink=0.5)
     plt.tight_layout()
     
-for lbl,cmin in zip(labels,(50,100,50)):
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+x = np.arange(len(regions)-1)
+ax.plot(x,m[1:,2],'ko')
+for side in ('right','top'):
+    ax.spines[side].set_visible(False)
+ax.tick_params(direction='out',top=False,right=False)
+ax.set_xticks(x)
+ax.set_xticklabels(regions[1:],rotation=90,ha='center')
+ax.set_ylabel('Visual response decoding latency (s)')
+ax.set_title('visual transient cluster')
+plt.tight_layout()
+    
+for lbl,cmin in zip(labels,(50,100,50,50,35)):
     fig = plt.figure(figsize=(6,6))
     ax = fig.add_subplot(1,1,1)
     m = np.full((len(regions),len(namedClusters)),np.nan)
@@ -811,7 +831,7 @@ clusters = (2,2,11,11)
 psthBinSize = 5
 preTime = int(750/psthBinSize)
 postTime = int(750/psthBinSize)
-psth = {str(region)+' cluster '+str(clust): {lbl: {align: [] for align in ('change','lick')} for lbl in ('change lick','change no lick','non-change lick','non-change no lick')} for region,clust in zip(regions,clusters)}
+psth = {str(region)+' cluster '+str(clust): {lbl: {align: [] for align in ('change','lick')} for lbl in ('change lick','change no lick','non-change lick','non-change no lick','omission no lick')} for region,clust in zip(regions,clusters)}
 for sessionInd,sessionId in enumerate(sessionIds):
     print(sessionInd)
     units = unitTable.set_index('unit_id').loc[unitData[str(sessionId)]['unitIds'][:]]
@@ -833,8 +853,8 @@ for sessionInd,sessionId in enumerate(sessionIds):
             sp[i]=spikes[u,:,:]
             
         if nUnits > 0:
-            for ind,lbl in zip((changeFlashes & lick,changeFlashes & ~lick,nonChangeFlashes & lick,nonChangeFlashes & ~lick),
-                               ('change lick','change no lick','non-change lick','non-change no lick')):
+            for ind,lbl in zip((changeFlashes & lick,changeFlashes & ~lick,nonChangeFlashes & lick,nonChangeFlashes & ~lick, omittedFlashes & ~lick),
+                               ('change lick','change no lick','non-change lick','non-change no lick','omission no lick')):
                 nFlashes = ind.sum()
                 for align in ('change','lick'):
                     if nFlashes==0 or (align=='lick' and 'no lick' in lbl):
@@ -859,7 +879,7 @@ for key in psth:
             ax.plot([0,0],[-1000,1000],'k--')
         ymin = 1000
         ymax = 0
-        for lbl,clr in zip(list(psth[key].keys()),'grbk'):
+        for lbl,clr in zip(list(psth[key].keys()),'grbkc'):
             d = np.concatenate(psth[key][lbl][align])*1000
             if np.any(~np.isnan(d)):
                 m = np.nanmean(d,axis=0)
@@ -914,6 +934,7 @@ for side in ('right','top'):
     ax.spines[side].set_visible(False)
 ax.tick_params(direction='out',top=False,right=False,labelsize=12)
 ax.set_xlim([0,500])
+ax.set_yticks(np.arange(20,40,5))
 ax.set_xlabel('Time from flash onset (ms)',fontsize=14)
 ax.set_ylabel('Spikes/s',fontsize=14)
 ax.legend(loc='upper left')
